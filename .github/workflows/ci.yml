@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_INCREMENTAL: false
   CARGO_TERM_COLOR: always
@@ -18,25 +21,62 @@ concurrency:
 
 jobs:
   check:
-    name: check, asm, fuzz, glm-oracle
-    runs-on: ubuntu-latest
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - run: cargo xtask check
-      - run: cargo test -p rglm --no-default-features --features libm,all-types,bytemuck,serde,mint,arbitrary,derive
-      - run: cargo test -p rglm --features scalar-math,all-types,bytemuck,serde,mint,arbitrary,derive
-      - run: cargo xtask asm
-      - run: cargo xtask fuzz
-      - run: cargo xtask oracle-test
+      - name: Workspace check
+        run: cargo xtask check
+      - name: Documentation
+        run: cargo doc --workspace --no-deps --all-features
+      - name: Test no_std (libm)
+        run: cargo test -p rglm --no-default-features --features libm,all-types,bytemuck,serde,mint,arbitrary,derive
+      - name: Test scalar fallback
+        run: cargo test -p rglm --features scalar-math,all-types,bytemuck,serde,mint,arbitrary,derive
+      - name: Verify assembly zero-spill probes
+        run: cargo xtask asm
+      - name: Fuzz smoke suite
+        run: cargo xtask fuzz
+      - name: C++ GLM differential ULP oracle
+        run: cargo xtask oracle-test
+
+  simd-targets:
+    name: x86_64 SSE4.1/FMA & wasm32 simd128
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust and wasm32 target
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Test x86_64 SSE4.1 + FMA
+        env:
+          RUSTFLAGS: -D warnings -C target-feature=+sse4.1,+fma
+        run: |
+          cargo clippy -p rglm --all-targets --features bytemuck,serde,mint,arbitrary,derive -- -D warnings
+          cargo test -p rglm --features bytemuck,serde,mint,arbitrary,derive
+      - name: Check wasm32-unknown-unknown (scalar)
+        run: cargo clippy -p rglm --target wasm32-unknown-unknown --no-default-features --features libm,all-types,bytemuck,serde,mint,arbitrary,derive -- -D warnings
+      - name: Check wasm32-unknown-unknown (simd128)
+        env:
+          RUSTFLAGS: -D warnings -C target-feature=+simd128
+        run: cargo clippy -p rglm --target wasm32-unknown-unknown --no-default-features --features libm,all-types,bytemuck,serde,mint,arbitrary,derive -- -D warnings
 
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show active-toolchain || rustup toolchain install
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
