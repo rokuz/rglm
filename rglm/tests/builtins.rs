@@ -137,6 +137,38 @@ fn simd_transcendentals_ulp_accuracy() {
         }
     }
 
+    let worst_poles = vec4!(4.712389, 252.89821, 2238.3848, 3185.575);
+    let ps = to_array(sin(worst_poles));
+    let pc = to_array(cos(worst_poles));
+    let pt = to_array(tan(worst_poles));
+    let pa = to_array(worst_poles);
+    for lane in 0..4 {
+        let x64 = pa[lane] as f64;
+        assert!(ulp_diff_f32(ps[lane], x64.sin()) <= 1.5);
+        assert!(ulp_diff_f32(pc[lane], x64.cos()) <= 1.5);
+        assert!(ulp_diff_f32(pt[lane], x64.tan()) <= 1.5);
+    }
+
+    for k in (1..=2600).step_by(17) {
+        let xf = ((k as f64) * core::f64::consts::FRAC_PI_2) as f32;
+        let v = vec4!(
+            f32::from_bits(xf.to_bits() - 1),
+            xf,
+            f32::from_bits(xf.to_bits() + 1),
+            -xf,
+        );
+        let sv = to_array(sin(v));
+        let cv = to_array(cos(v));
+        let tv = to_array(tan(v));
+        let va = to_array(v);
+        for lane in 0..4 {
+            let x64 = va[lane] as f64;
+            assert!(ulp_diff_f32(sv[lane], x64.sin()) <= 1.5);
+            assert!(ulp_diff_f32(cv[lane], x64.cos()) <= 1.5);
+            assert!(ulp_diff_f32(tv[lane], x64.tan()) <= 1.5);
+        }
+    }
+
     assert_eq!(atan!(1.0_f32, 1.0_f32), atan2(1.0_f32, 1.0_f32));
     #[cfg(not(feature = "debug-assert"))]
     assert!(normalize(vec3(0.0)).x.is_nan());

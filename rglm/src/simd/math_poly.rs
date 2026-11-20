@@ -2,9 +2,12 @@ use super::{SimdF32x4, SimdMask32x4};
 use crate::math::f32_math;
 
 const FRAC_2_PI: f32 = core::f32::consts::FRAC_2_PI;
+const PIO2_C1: f32 = f32::from_bits(0x3fc9_0000);
+const PIO2_C2: f32 = f32::from_bits(0x39fd_a000);
+const PIO2_C3: f32 = f32::from_bits(0x33a2_2000);
+const PIO2_C4: f32 = f32::from_bits(0x2c34_6000);
+const PIO2_C5: f32 = f32::from_bits(0x248d_3132);
 const PIO2_HI: f32 = f32::from_bits(0x3fc9_0f80);
-const PIO2_MID: f32 = f32::from_bits(0x3735_4400);
-const PIO2_LO: f32 = f32::from_bits(0x2e85_a309);
 const PIO2_TAIL: f32 = (core::f64::consts::FRAC_PI_2 - (PIO2_HI as f64)) as f32;
 const PIO4_HI: f32 = f32::from_bits(0x3f49_0f80);
 const PIO4_LO: f32 = (core::f64::consts::FRAC_PI_4 - (PIO4_HI as f64)) as f32;
@@ -15,6 +18,36 @@ const LN2_HI: f32 = f32::from_bits(0x3f31_7200);
 const LN2_LO: f32 = (core::f64::consts::LN_2 - (LN2_HI as f64)) as f32;
 const LOG2_E_HI: f32 = f32::from_bits(0x3fb8_aa00);
 const LOG2_E_LO: f32 = (core::f64::consts::LOG2_E - (LOG2_E_HI as f64)) as f32;
+
+#[inline(always)]
+fn two_sum(a: SimdF32x4, b: SimdF32x4) -> (SimdF32x4, SimdF32x4) {
+    let s = a.add(b);
+    let v = s.sub(a);
+    let e = a.sub(s.sub(v)).add(b.sub(v));
+    (s, e)
+}
+
+#[inline(always)]
+fn reduce_pio2(x: SimdF32x4) -> (SimdF32x4, SimdF32x4, SimdF32x4) {
+    let k_flt = x
+        .mul(SimdF32x4::splat(FRAC_2_PI))
+        .round_even()
+        .add(SimdF32x4::splat(0.0));
+    let neg_k = SimdF32x4::splat(0.0).sub(k_flt);
+    let p1 = neg_k.mul(SimdF32x4::splat(PIO2_C1));
+    let p2 = neg_k.mul(SimdF32x4::splat(PIO2_C2));
+    let p3 = neg_k.mul(SimdF32x4::splat(PIO2_C3));
+    let p4 = neg_k.mul(SimdF32x4::splat(PIO2_C4));
+    let p5 = neg_k.mul(SimdF32x4::splat(PIO2_C5));
+
+    let s1 = x.add(p1);
+    let (s2, e2) = two_sum(s1, p2);
+    let (s3, e3) = two_sum(s2, p3);
+    let (s4, e4) = two_sum(s3, p4);
+    let tail = p5.add(e4).add(e3).add(e2);
+    let (r_hi, r_lo) = two_sum(s4, tail);
+    (k_flt, r_hi, r_lo)
+}
 
 impl SimdF32x4 {
     #[inline]
@@ -31,15 +64,7 @@ impl SimdF32x4 {
             );
         }
 
-        let k_flt = self
-            .mul(Self::splat(FRAC_2_PI))
-            .round_even()
-            .add(Self::splat(0.0));
-        let r = self
-            .sub(k_flt.mul(Self::splat(PIO2_HI)))
-            .sub(k_flt.mul(Self::splat(PIO2_MID)))
-            .sub(k_flt.mul(Self::splat(PIO2_LO)));
-
+        let (k_flt, r, r_lo) = reduce_pio2(self);
         let r2 = r.mul(r);
         let r3 = r2.mul(r);
         let r4 = r2.mul(r2);
@@ -49,13 +74,16 @@ impl SimdF32x4 {
             .mul_add(r2, Self::splat(-1.984_127e-4))
             .mul_add(r2, Self::splat(8.333_334e-3))
             .mul_add(r2, Self::splat(-1.666_666_7e-1));
-        let sin_r = r3.mul_add(sin_poly, r);
+        let sin_r = r.add(r3.mul_add(sin_poly, r_lo));
 
         let cos_poly = Self::splat(-2.752_155_7e-7)
             .mul_add(r2, Self::splat(2.480_060_1e-5))
             .mul_add(r2, Self::splat(-1.388_886_7e-3))
             .mul_add(r2, Self::splat(4.166_666_4e-2));
-        let cos_r = r4.mul_add(cos_poly, Self::splat(1.0).sub(r2.mul(Self::splat(0.5))));
+        let half_r2 = r2.mul(Self::splat(0.5));
+        let w = Self::splat(1.0).sub(half_r2);
+        let w_err = Self::splat(1.0).sub(w).sub(half_r2);
+        let cos_r = w.add(r4.mul_add(cos_poly, w_err.sub(r.mul(r_lo))));
 
         let ka = k_flt.to_array();
         let q = [
@@ -117,29 +145,27 @@ impl SimdF32x4 {
             ]);
         }
 
-        let k_flt = self
-            .mul(Self::splat(FRAC_2_PI))
-            .round_even()
-            .add(Self::splat(0.0));
-        let neg_k = Self::splat(0.0).sub(k_flt);
-        let s1 = neg_k.mul_add(Self::splat(PIO2_HI), self);
-        let r_hi = neg_k.mul_add(Self::splat(PIO2_TAIL), s1);
-        let r_lo = s1
-            .sub(r_hi)
-            .add(neg_k.mul(Self::splat(PIO2_MID)))
-            .add(neg_k.mul(Self::splat(PIO2_LO)));
-
+        let (k_flt, r_hi, r_lo) = reduce_pio2(self);
         let r2 = r_hi.mul(r_hi);
+        let r2_lo = r_hi.fma_exact(r_hi, r2.neg());
         let r3 = r2.mul(r_hi);
+        let r3_lo = r2.fma_exact(r_hi, r3.neg()).add(r2_lo.mul(r_hi));
         let poly = Self::splat(9.385_402e-3)
             .mul_add(r2, Self::splat(3.119_922_3e-3))
             .mul_add(r2, Self::splat(2.443_013_5e-2))
             .mul_add(r2, Self::splat(5.341_128e-2))
             .mul_add(r2, Self::splat(1.333_879_9e-1))
-            .mul_add(r2, Self::splat(3.333_315_6e-1));
-        let tail = r3.mul_add(poly, r_lo);
-        let t_hi = r_hi.add(tail);
-        let t_lo = r_hi.sub(t_hi).add(tail);
+            .mul(r2);
+        let c3_hi = Self::splat(f32::from_bits(0x3eaa_aa00));
+        let c3_lo = Self::splat(3.333_315_6e-1 - f32::from_bits(0x3eaa_aa00));
+        let t3_hi = r3.mul(c3_hi);
+        let t3_lo = r3
+            .fma_exact(c3_hi, t3_hi.neg())
+            .add(r3.mul(c3_lo))
+            .add(r3_lo.mul(Self::splat(3.333_315_6e-1)));
+        let (s_hi, s_lo) = two_sum(r_hi, t3_hi);
+        let tail = r3.mul_add(poly, t3_lo).add(r_lo).add(s_lo);
+        let (t_hi, t_lo) = two_sum(s_hi, tail);
 
         let ka = k_flt.to_array();
         let odd_mask = SimdMask32x4::new(
