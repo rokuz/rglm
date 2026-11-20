@@ -1,24 +1,25 @@
+[graph]
+exclude-unpublished = true
+exclude-dev = true
+
 [bans]
 multiple-versions = "deny"
-deny = []
-skip-tree = [
-    # ignore criterion dev-dependency that often have duplicate dependencies internally
-    { name = "criterion" },
-    # encase 0.12 is intentionally supported alongside 0.13, see #857
-    { crate = "encase:>=0.12,<0.13", reason = "encase 0.12 is supported alongside 0.13" },
-]
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[advisories]
+ignore = []
 
 [licenses]
 allow = [
     "Apache-2.0",
+    "BSD-2-Clause",
     "MIT",
-    "MIT-0",
     "Unicode-3.0",
-    "Zlib",
 ]
+private = { ignore = true }
 
-[advisories]
-# ignoring bincode unmaintained advisory as it's a dependency of a dev-dependency it's low risk to users.
-ignore = [
-    "RUSTSEC-2025-0141"
-]
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+required-git-spec = "rev"

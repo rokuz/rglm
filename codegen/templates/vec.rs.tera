@@ -1,0 +1,1183 @@
+{% set components = ["x", "y", "z", "w"][:dim] -%}
+{% if is_f16 -%}
+use half::f16;
+use crate::simd::SimdF16x4;
+{% endif -%}
+{% if is_float -%}
+use crate::math::{{ math_mod }};
+{% endif -%}
+{% if storage == "simd_f32x4" -%}
+use crate::simd::SimdF32x4;
+use core::ops::{Deref, DerefMut};
+{% elif storage == "simd_f64x2" or storage == "simd_f64x2_pair" -%}
+use crate::simd::SimdF64x2;
+use core::ops::{Deref, DerefMut};
+{% endif -%}
+use crate::{{ mask_t }};
+{% if self_t == "Vec3A" -%}
+use crate::{BVec3A, Vec3};
+{% elif self_t == "Vec3" -%}
+use crate::Vec3A;
+{% elif self_t == "Vec4" -%}
+use crate::BVec4A;
+{% endif -%}
+use core::fmt;
+use core::iter::{Product, Sum};
+use core::ops::{
+    Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Rem, RemAssign, Sub,
+    SubAssign,
+};
+{% if is_signed -%}
+use core::ops::Neg;
+{% endif -%}
+{% if is_int -%}
+use core::ops::{
+    BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Shl, ShlAssign, Shr,
+    ShrAssign,
+};
+{% endif -%}
+
+{% if storage == "simd_f32x4" %}
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(transparent)]
+pub struct {{ self_t }}(pub(crate) SimdF32x4);
+{% elif storage == "simd_f64x2" %}
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(transparent)]
+pub struct {{ self_t }}(pub(crate) SimdF64x2);
+{% elif storage == "simd_f64x2_pair" %}
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C, align(16))]
+pub struct {{ self_t }}(pub(crate) [SimdF64x2; 2]);
+{% elif is_int %}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C)]
+pub struct {{ self_t }} {
+    {% for c in components -%}
+    pub {{ c }}: {{ scalar_t }},
+    {% endfor -%}
+}
+{% else %}
+#[derive(Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C)]
+pub struct {{ self_t }} {
+    {% for c in components -%}
+    pub {{ c }}: {{ scalar_t }},
+    {% endfor -%}
+}
+{% endif %}
+
+impl {{ self_t }} {
+    pub const ZERO: Self = Self::splat({{ zero_lit }});
+    pub const ONE: Self = Self::splat({{ one_lit }});
+    {% if is_signed -%}
+    pub const NEG_ONE: Self = Self::splat({{ neg_one_lit }});
+    {% endif -%}
+    pub const MIN: Self = Self::splat({{ scalar_t }}::MIN);
+    pub const MAX: Self = Self::splat({{ scalar_t }}::MAX);
+    {% if is_float -%}
+    pub const NAN: Self = Self::splat({{ scalar_t }}::NAN);
+    pub const INFINITY: Self = Self::splat({{ scalar_t }}::INFINITY);
+    pub const NEG_INFINITY: Self = Self::splat({{ scalar_t }}::NEG_INFINITY);
+    {% endif -%}
+
+    {% if dim == 2 -%}
+    pub const X: Self = Self::new({{ one_lit }}, {{ zero_lit }});
+    pub const Y: Self = Self::new({{ zero_lit }}, {{ one_lit }});
+    pub const AXES: [Self; 2] = [Self::X, Self::Y];
+    {% if is_signed -%}
+    pub const NEG_X: Self = Self::new({{ neg_one_lit }}, {{ zero_lit }});
+    pub const NEG_Y: Self = Self::new({{ zero_lit }}, {{ neg_one_lit }});
+    {% endif -%}
+    {% elif dim == 3 -%}
+    pub const X: Self = Self::new({{ one_lit }}, {{ zero_lit }}, {{ zero_lit }});
+    pub const Y: Self = Self::new({{ zero_lit }}, {{ one_lit }}, {{ zero_lit }});
+    pub const Z: Self = Self::new({{ zero_lit }}, {{ zero_lit }}, {{ one_lit }});
+    pub const AXES: [Self; 3] = [Self::X, Self::Y, Self::Z];
+    {% if is_signed -%}
+    pub const NEG_X: Self = Self::new({{ neg_one_lit }}, {{ zero_lit }}, {{ zero_lit }});
+    pub const NEG_Y: Self = Self::new({{ zero_lit }}, {{ neg_one_lit }}, {{ zero_lit }});
+    pub const NEG_Z: Self = Self::new({{ zero_lit }}, {{ zero_lit }}, {{ neg_one_lit }});
+    {% endif -%}
+    {% elif dim == 4 -%}
+    pub const X: Self = Self::new({{ one_lit }}, {{ zero_lit }}, {{ zero_lit }}, {{ zero_lit }});
+    pub const Y: Self = Self::new({{ zero_lit }}, {{ one_lit }}, {{ zero_lit }}, {{ zero_lit }});
+    pub const Z: Self = Self::new({{ zero_lit }}, {{ zero_lit }}, {{ one_lit }}, {{ zero_lit }});
+    pub const W: Self = Self::new({{ zero_lit }}, {{ zero_lit }}, {{ zero_lit }}, {{ one_lit }});
+    pub const AXES: [Self; 4] = [Self::X, Self::Y, Self::Z, Self::W];
+    {% if is_signed -%}
+    pub const NEG_X: Self = Self::new({{ neg_one_lit }}, {{ zero_lit }}, {{ zero_lit }}, {{ zero_lit }});
+    pub const NEG_Y: Self = Self::new({{ zero_lit }}, {{ neg_one_lit }}, {{ zero_lit }}, {{ zero_lit }});
+    pub const NEG_Z: Self = Self::new({{ zero_lit }}, {{ zero_lit }}, {{ neg_one_lit }}, {{ zero_lit }});
+    pub const NEG_W: Self = Self::new({{ zero_lit }}, {{ zero_lit }}, {{ zero_lit }}, {{ neg_one_lit }});
+    {% endif -%}
+    {% endif -%}
+
+    #[inline(always)]
+    pub(crate) const fn new({% for c in components %}{{ c }}: {{ scalar_t }}{% if not loop.last %}, {% endif %}{% endfor %}) -> Self {
+        {% if storage == "simd_f32x4" and dim == 3 -%}
+        Self(SimdF32x4::new(x, y, z, 0.0))
+        {% elif storage == "simd_f32x4" and dim == 4 -%}
+        Self(SimdF32x4::new(x, y, z, w))
+        {% elif storage == "simd_f64x2" -%}
+        Self(SimdF64x2::new(x, y))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([SimdF64x2::new(x, y), SimdF64x2::new(z, w)])
+        {% else -%}
+        Self { {% for c in components %}{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) const fn splat(v: {{ scalar_t }}) -> Self {
+        Self::new({% for c in components %}v{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+
+    #[inline(always)]
+    pub(crate) const fn from_array(a: [{{ scalar_t }}; {{ dim }}]) -> Self {
+        Self::new({% for c in components %}a[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+
+    #[inline(always)]
+    pub(crate) const fn to_array(self) -> [{{ scalar_t }}; {{ dim }}] {
+        {% if storage == "simd_f32x4" -%}
+        let a = self.0.to_array();
+        [{% for c in components %}a[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %}]
+        {% elif storage == "simd_f64x2" -%}
+        self.0.to_array()
+        {% elif storage == "simd_f64x2_pair" -%}
+        let a0 = self.0[0].to_array();
+        let a1 = self.0[1].to_array();
+        [a0[0], a0[1], a1[0], a1[1]]
+        {% else -%}
+        [{% for c in components %}self.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %}]
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn dot(self, rhs: Self) -> {{ scalar_t }} {
+        {% if storage == "simd_f32x4" and dim == 3 -%}
+        self.0.dot3(rhs.0)
+        {% elif storage == "simd_f32x4" and dim == 4 -%}
+        self.0.dot4(rhs.0)
+        {% elif storage == "simd_f64x2" -%}
+        self.0.dot2(rhs.0)
+        {% elif storage == "simd_f64x2_pair" -%}
+        self.0[0].dot2(rhs.0[0]) + self.0[1].dot2(rhs.0[1])
+        {% elif is_f16 -%}
+        let p = (self * rhs).to_array();
+        {% if dim == 2 -%}
+        p[0] + p[1]
+        {% elif dim == 3 -%}
+        (p[0] + p[1]) + p[2]
+        {% else -%}
+        (p[0] + p[2]) + (p[1] + p[3])
+        {% endif -%}
+        {% elif is_int -%}
+        {% for c in components %}{% if not loop.first %}.wrapping_add({% endif %}self.{{ c }}.wrapping_mul(rhs.{{ c }}){% if not loop.first %}){% endif %}{% endfor %}
+        {% else -%}
+        {% for c in components %}{% if not loop.first %} + {% endif %}(self.{{ c }} * rhs.{{ c }}){% endfor %}
+        {% endif -%}
+    }
+
+    {% if dim == 3 and (is_float or is_signed) %}
+    #[inline(always)]
+    pub(crate) fn cross(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.cross3(rhs.0))
+        {% elif is_int -%}
+        Self {
+            x: self.y.wrapping_mul(rhs.z).wrapping_sub(self.z.wrapping_mul(rhs.y)),
+            y: self.z.wrapping_mul(rhs.x).wrapping_sub(self.x.wrapping_mul(rhs.z)),
+            z: self.x.wrapping_mul(rhs.y).wrapping_sub(self.y.wrapping_mul(rhs.x)),
+        }
+        {% else -%}
+        Self::new(
+            (self.y * rhs.z) - (self.z * rhs.y),
+            (self.z * rhs.x) - (self.x * rhs.z),
+            (self.x * rhs.y) - (self.y * rhs.x),
+        )
+        {% endif -%}
+    }
+    {% endif %}
+
+    #[inline(always)]
+    pub(crate) fn min(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.min(rhs.0))
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.min(rhs.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].min(rhs.0[0]), self.0[1].min(rhs.0[1])])
+        {% else -%}
+        Self::new({% for c in components %}self.{{ c }}.min(rhs.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn max(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.max(rhs.0))
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.max(rhs.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].max(rhs.0[0]), self.0[1].max(rhs.0[1])])
+        {% else -%}
+        Self::new({% for c in components %}self.{{ c }}.max(rhs.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn clamp(self, min_val: Self, max_val: Self) -> Self {
+        self.max(min_val).min(max_val)
+    }
+
+    {% if is_signed %}
+    #[inline(always)]
+    pub(crate) fn abs(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.abs())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.abs())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].abs(), self.0[1].abs()])
+        {% elif is_float -%}
+        Self::new({% for c in components %}{{ math_mod }}::abs(self.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% else -%}
+        Self::new({% for c in components %}self.{{ c }}.wrapping_abs(){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn sign(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.sign())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.sign())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].sign(), self.0[1].sign()])
+        {% elif is_float -%}
+        Self::new({% for c in components %}{{ math_mod }}::sign(self.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% else -%}
+        Self::new({% for c in components %}if self.{{ c }} > 0 { 1 } else if self.{{ c }} < 0 { -1 } else { 0 }{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+    {% endif %}
+
+    {% if is_float %}
+    #[inline(always)]
+    pub(crate) fn floor(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.floor())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.floor())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].floor(), self.0[1].floor()])
+        {% else -%}
+        Self::new({% for c in components %}{{ math_mod }}::floor(self.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn ceil(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.ceil())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.ceil())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].ceil(), self.0[1].ceil()])
+        {% else -%}
+        Self::new({% for c in components %}{{ math_mod }}::ceil(self.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn trunc(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.trunc())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.trunc())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].trunc(), self.0[1].trunc()])
+        {% else -%}
+        Self::new({% for c in components %}{{ math_mod }}::trunc(self.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn round(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.round())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.round())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].round(), self.0[1].round()])
+        {% else -%}
+        Self::new({% for c in components %}{{ math_mod }}::round(self.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn round_even(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.round_even())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.round_even())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].round_even(), self.0[1].round_even()])
+        {% else -%}
+        Self::new({% for c in components %}{{ math_mod }}::round_even(self.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn fract(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.fract())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.fract())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].fract(), self.0[1].fract()])
+        {% else -%}
+        self - self.floor()
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn modulo(self, rhs: Self) -> Self {
+        self - (rhs * (self / rhs).floor())
+    }
+
+    #[inline(always)]
+    pub(crate) fn sqrt(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.sqrt())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.sqrt())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].sqrt(), self.0[1].sqrt()])
+        {% else -%}
+        Self::new({% for c in components %}{{ math_mod }}::sqrt(self.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn inversesqrt(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.inversesqrt())
+        {% else -%}
+        Self::ONE / self.sqrt()
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn mul_add(self, b: Self, c: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.mul_add(b.0, c.0))
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.mul_add(b.0, c.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([
+            self.0[0].mul_add(b.0[0], c.0[0]),
+            self.0[1].mul_add(b.0[1], c.0[1]),
+        ])
+        {% elif is_f16 -%}
+        {% if dim == 2 -%}
+        let r = SimdF16x4([self.x, self.y, f16::ZERO, f16::ZERO])
+            .mul_add(
+                SimdF16x4([b.x, b.y, f16::ZERO, f16::ZERO]),
+                SimdF16x4([c.x, c.y, f16::ZERO, f16::ZERO]),
+            )
+            .to_array();
+        Self::new(r[0], r[1])
+        {% elif dim == 3 -%}
+        let r = SimdF16x4([self.x, self.y, self.z, f16::ZERO])
+            .mul_add(
+                SimdF16x4([b.x, b.y, b.z, f16::ZERO]),
+                SimdF16x4([c.x, c.y, c.z, f16::ZERO]),
+            )
+            .to_array();
+        Self::new(r[0], r[1], r[2])
+        {% else -%}
+        let r = SimdF16x4([self.x, self.y, self.z, self.w])
+            .mul_add(
+                SimdF16x4([b.x, b.y, b.z, b.w]),
+                SimdF16x4([c.x, c.y, c.z, c.w]),
+            )
+            .to_array();
+        Self::new(r[0], r[1], r[2], r[3])
+        {% endif -%}
+        {% else -%}
+        Self::new({% for c in components %}{{ math_mod }}::mul_add(self.{{ c }}, b.{{ c }}, c.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn fma_exact(self, b: Self, c: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.fma_exact(b.0, c.0))
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.fma_exact(b.0, c.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([
+            self.0[0].fma_exact(b.0[0], c.0[0]),
+            self.0[1].fma_exact(b.0[1], c.0[1]),
+        ])
+        {% else -%}
+        let x = self.to_array();
+        let y = b.to_array();
+        let z = c.to_array();
+        Self::new({% for c in components %}{{ math_mod }}::mul_add(x[{{ loop.index0 }}], y[{{ loop.index0 }}], z[{{ loop.index0 }}]){% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn length(self) -> {{ scalar_t }} {
+        {{ math_mod }}::sqrt(self.dot(self))
+    }
+
+    #[inline(always)]
+    pub(crate) fn normalize(self) -> Self {
+        let len_sq = self.dot(self);
+        rglm_debug_assert!(len_sq > {{ zero_lit }});
+        self * {{ math_mod }}::inversesqrt(len_sq)
+    }
+    {% endif %}
+
+    #[inline(always)]
+    pub(crate) fn select_mask(mask: {{ mask_t }}, if_true: Self, if_false: Self) -> Self {
+        {% if self_t == "Vec3A" -%}
+        Self(SimdF32x4::select(BVec3A::from(mask).0, if_true.0, if_false.0))
+        {% elif self_t == "Vec4" -%}
+        Self(SimdF32x4::select(BVec4A::from(mask).0, if_true.0, if_false.0))
+        {% else -%}
+        let m = mask.to_array();
+        let t = if_true.to_array();
+        let f = if_false.to_array();
+        Self::new({% for c in components %}if m[{{ loop.index0 }}] { t[{{ loop.index0 }}] } else { f[{{ loop.index0 }}] }{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+
+    {% if self_t == "Vec3A" %}
+    #[inline(always)]
+    pub(crate) fn select_simd(mask: BVec3A, if_true: Self, if_false: Self) -> Self {
+        Self(SimdF32x4::select(mask.0, if_true.0, if_false.0))
+    }
+    {% elif self_t == "Vec4" %}
+    #[inline(always)]
+    pub(crate) fn select_simd(mask: BVec4A, if_true: Self, if_false: Self) -> Self {
+        Self(SimdF32x4::select(mask.0, if_true.0, if_false.0))
+    }
+    {% endif %}
+
+    #[inline(always)]
+    pub(crate) fn cmp_eq(self, rhs: Self) -> {{ mask_t }} {
+        let a = self.to_array();
+        let b = rhs.to_array();
+        {{ mask_t }}::new({% for c in components %}a[{{ loop.index0 }}] == b[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+
+    #[inline(always)]
+    pub(crate) fn cmp_ne(self, rhs: Self) -> {{ mask_t }} {
+        let a = self.to_array();
+        let b = rhs.to_array();
+        {{ mask_t }}::new({% for c in components %}a[{{ loop.index0 }}] != b[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+
+    #[inline(always)]
+    pub(crate) fn cmp_lt(self, rhs: Self) -> {{ mask_t }} {
+        let a = self.to_array();
+        let b = rhs.to_array();
+        {{ mask_t }}::new({% for c in components %}a[{{ loop.index0 }}] < b[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+
+    #[inline(always)]
+    pub(crate) fn cmp_le(self, rhs: Self) -> {{ mask_t }} {
+        let a = self.to_array();
+        let b = rhs.to_array();
+        {{ mask_t }}::new({% for c in components %}a[{{ loop.index0 }}] <= b[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+
+    #[inline(always)]
+    pub(crate) fn cmp_gt(self, rhs: Self) -> {{ mask_t }} {
+        let a = self.to_array();
+        let b = rhs.to_array();
+        {{ mask_t }}::new({% for c in components %}a[{{ loop.index0 }}] > b[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+
+    #[inline(always)]
+    pub(crate) fn cmp_ge(self, rhs: Self) -> {{ mask_t }} {
+        let a = self.to_array();
+        let b = rhs.to_array();
+        {{ mask_t }}::new({% for c in components %}a[{{ loop.index0 }}] >= b[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+}
+
+{% if storage != "fields" %}
+impl Default for {{ self_t }} {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
+impl PartialEq for {{ self_t }} {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        {% if self_t == "Vec3A" -%}
+        self.0.cmp_eq(other.0).all3()
+        {% elif self_t == "Vec4" -%}
+        self.0.cmp_eq(other.0).all4()
+        {% else -%}
+        self.to_array() == other.to_array()
+        {% endif -%}
+    }
+}
+
+impl Deref for {{ self_t }} {
+    type Target = crate::deref::Vec{{ dim }}<{{ scalar_t }}>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} begins with {{ dim }} contiguous {{ scalar_t }} lanes"
+        )]
+        unsafe {
+            &*(core::ptr::from_ref(self).cast::<Self::Target>())
+        }
+    }
+}
+
+impl DerefMut for {{ self_t }} {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} begins with {{ dim }} contiguous {{ scalar_t }} lanes"
+        )]
+        unsafe {
+            &mut *(core::ptr::from_mut(self).cast::<Self::Target>())
+        }
+    }
+}
+{% endif %}
+
+impl fmt::Debug for {{ self_t }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let a = self.to_array();
+        f.debug_tuple(stringify!({{ self_t }}))
+            {% for c in components -%}
+            .field(&a[{{ loop.index0 }}])
+            {% endfor -%}
+            .finish()
+    }
+}
+
+impl fmt::Display for {{ self_t }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let a = self.to_array();
+        write!(f, "[{% for c in components %}{{ "{}" }}{% if not loop.last %}, {% endif %}{% endfor %}]", {% for c in components %}a[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+}
+
+impl AsRef<[{{ scalar_t }}; {{ dim }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn as_ref(&self) -> &[{{ scalar_t }}; {{ dim }}] {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} starts with {{ dim }} contiguous {{ scalar_t }} lanes with sufficient alignment"
+        )]
+        unsafe {
+            &*(core::ptr::from_ref(self).cast::<[{{ scalar_t }}; {{ dim }}]>())
+        }
+    }
+}
+
+impl AsMut<[{{ scalar_t }}; {{ dim }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn as_mut(&mut self) -> &mut [{{ scalar_t }}; {{ dim }}] {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} starts with {{ dim }} contiguous {{ scalar_t }} lanes with sufficient alignment"
+        )]
+        unsafe {
+            &mut *(core::ptr::from_mut(self).cast::<[{{ scalar_t }}; {{ dim }}]>())
+        }
+    }
+}
+
+impl Index<usize> for {{ self_t }} {
+    type Output = {{ scalar_t }};
+
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.as_ref()[index]
+    }
+}
+
+impl IndexMut<usize> for {{ self_t }} {
+    #[inline(always)]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.as_mut()[index]
+    }
+}
+
+impl Add for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.add(rhs.0))
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.add(rhs.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].add(rhs.0[0]), self.0[1].add(rhs.0[1])])
+        {% elif is_f16 -%}
+        {% if dim == 2 -%}
+        let r = SimdF16x4([self.x, self.y, f16::ZERO, f16::ZERO])
+            .add(SimdF16x4([rhs.x, rhs.y, f16::ZERO, f16::ZERO]))
+            .to_array();
+        Self::new(r[0], r[1])
+        {% elif dim == 3 -%}
+        let r = SimdF16x4([self.x, self.y, self.z, f16::ZERO])
+            .add(SimdF16x4([rhs.x, rhs.y, rhs.z, f16::ZERO]))
+            .to_array();
+        Self::new(r[0], r[1], r[2])
+        {% else -%}
+        let r = SimdF16x4([self.x, self.y, self.z, self.w])
+            .add(SimdF16x4([rhs.x, rhs.y, rhs.z, rhs.w]))
+            .to_array();
+        Self::new(r[0], r[1], r[2], r[3])
+        {% endif -%}
+        {% elif is_int -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }}.wrapping_add(rhs.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %} }
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }} + rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+
+impl Add<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, rhs: {{ scalar_t }}) -> Self {
+        self + Self::splat(rhs)
+    }
+}
+
+impl Add<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn add(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        {{ self_t }}::splat(self) + rhs
+    }
+}
+
+impl AddAssign for {{ self_t }} {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl AddAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.sub(rhs.0))
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.sub(rhs.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].sub(rhs.0[0]), self.0[1].sub(rhs.0[1])])
+        {% elif is_f16 -%}
+        {% if dim == 2 -%}
+        let r = SimdF16x4([self.x, self.y, f16::ZERO, f16::ZERO])
+            .sub(SimdF16x4([rhs.x, rhs.y, f16::ZERO, f16::ZERO]))
+            .to_array();
+        Self::new(r[0], r[1])
+        {% elif dim == 3 -%}
+        let r = SimdF16x4([self.x, self.y, self.z, f16::ZERO])
+            .sub(SimdF16x4([rhs.x, rhs.y, rhs.z, f16::ZERO]))
+            .to_array();
+        Self::new(r[0], r[1], r[2])
+        {% else -%}
+        let r = SimdF16x4([self.x, self.y, self.z, self.w])
+            .sub(SimdF16x4([rhs.x, rhs.y, rhs.z, rhs.w]))
+            .to_array();
+        Self::new(r[0], r[1], r[2], r[3])
+        {% endif -%}
+        {% elif is_int -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }}.wrapping_sub(rhs.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %} }
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }} - rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+
+impl Sub<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn sub(self, rhs: {{ scalar_t }}) -> Self {
+        self - Self::splat(rhs)
+    }
+}
+
+impl Sub<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn sub(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        {{ self_t }}::splat(self) - rhs
+    }
+}
+
+impl SubAssign for {{ self_t }} {
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl SubAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self - rhs;
+    }
+}
+
+impl Mul for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn mul(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.mul(rhs.0))
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.mul(rhs.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].mul(rhs.0[0]), self.0[1].mul(rhs.0[1])])
+        {% elif is_f16 -%}
+        {% if dim == 2 -%}
+        let r = SimdF16x4([self.x, self.y, f16::ZERO, f16::ZERO])
+            .mul(SimdF16x4([rhs.x, rhs.y, f16::ZERO, f16::ZERO]))
+            .to_array();
+        Self::new(r[0], r[1])
+        {% elif dim == 3 -%}
+        let r = SimdF16x4([self.x, self.y, self.z, f16::ZERO])
+            .mul(SimdF16x4([rhs.x, rhs.y, rhs.z, f16::ZERO]))
+            .to_array();
+        Self::new(r[0], r[1], r[2])
+        {% else -%}
+        let r = SimdF16x4([self.x, self.y, self.z, self.w])
+            .mul(SimdF16x4([rhs.x, rhs.y, rhs.z, rhs.w]))
+            .to_array();
+        Self::new(r[0], r[1], r[2], r[3])
+        {% endif -%}
+        {% elif is_int -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }}.wrapping_mul(rhs.{{ c }}){% if not loop.last %}, {% endif %}{% endfor %} }
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }} * rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+
+impl Mul<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn mul(self, rhs: {{ scalar_t }}) -> Self {
+        self * Self::splat(rhs)
+    }
+}
+
+impl Mul<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn mul(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        {{ self_t }}::splat(self) * rhs
+    }
+}
+
+impl MulAssign for {{ self_t }} {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
+impl MulAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self * rhs;
+    }
+}
+
+impl Div for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn div(self, rhs: Self) -> Self {
+        {% if self_t == "Vec3A" -%}
+        let r = SimdF32x4::new(rhs.x, rhs.y, rhs.z, 1.0);
+        Self(self.0.div(r))
+        {% elif storage == "simd_f32x4" -%}
+        Self(self.0.div(rhs.0))
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.div(rhs.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].div(rhs.0[0]), self.0[1].div(rhs.0[1])])
+        {% elif is_f16 -%}
+        {% if dim == 2 -%}
+        let r = SimdF16x4([self.x, self.y, f16::ZERO, f16::ZERO])
+            .div(SimdF16x4([rhs.x, rhs.y, f16::ONE, f16::ONE]))
+            .to_array();
+        Self::new(r[0], r[1])
+        {% elif dim == 3 -%}
+        let r = SimdF16x4([self.x, self.y, self.z, f16::ZERO])
+            .div(SimdF16x4([rhs.x, rhs.y, rhs.z, f16::ONE]))
+            .to_array();
+        Self::new(r[0], r[1], r[2])
+        {% else -%}
+        let r = SimdF16x4([self.x, self.y, self.z, self.w])
+            .div(SimdF16x4([rhs.x, rhs.y, rhs.z, rhs.w]))
+            .to_array();
+        Self::new(r[0], r[1], r[2], r[3])
+        {% endif -%}
+        {% elif is_int and is_signed -%}
+        Self { {% for c in components %}{{ c }}: if rhs.{{ c }} == 0 { 0 } else { self.{{ c }}.wrapping_div(rhs.{{ c }}) }{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% elif is_int -%}
+        Self { {% for c in components %}{{ c }}: if rhs.{{ c }} == 0 { 0 } else { self.{{ c }} / rhs.{{ c }} }{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }} / rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+
+impl Div<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn div(self, rhs: {{ scalar_t }}) -> Self {
+        self / Self::splat(rhs)
+    }
+}
+
+impl Div<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn div(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        {{ self_t }}::splat(self) / rhs
+    }
+}
+
+impl DivAssign for {{ self_t }} {
+    #[inline(always)]
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
+    }
+}
+
+impl DivAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn div_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self / rhs;
+    }
+}
+
+impl Rem for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn rem(self, rhs: Self) -> Self {
+        {% if self_t == "Vec3A" -%}
+        let r = SimdF32x4::new(rhs.x, rhs.y, rhs.z, 1.0);
+        Self(self.0.rem(r))
+        {% elif storage == "simd_f32x4" -%}
+        Self(self.0.rem(rhs.0))
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.rem(rhs.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].rem(rhs.0[0]), self.0[1].rem(rhs.0[1])])
+        {% elif is_int and is_signed -%}
+        Self { {% for c in components %}{{ c }}: if rhs.{{ c }} == 0 { 0 } else { self.{{ c }}.wrapping_rem(rhs.{{ c }}) }{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% elif is_int -%}
+        Self { {% for c in components %}{{ c }}: if rhs.{{ c }} == 0 { 0 } else { self.{{ c }} % rhs.{{ c }} }{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }} % rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+
+impl Rem<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn rem(self, rhs: {{ scalar_t }}) -> Self {
+        self % Self::splat(rhs)
+    }
+}
+
+impl Rem<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn rem(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        {{ self_t }}::splat(self) % rhs
+    }
+}
+
+impl RemAssign for {{ self_t }} {
+    #[inline(always)]
+    fn rem_assign(&mut self, rhs: Self) {
+        *self = *self % rhs;
+    }
+}
+
+impl RemAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn rem_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self % rhs;
+    }
+}
+
+{% if is_signed %}
+impl Neg for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn neg(self) -> Self {
+        {% if self_t == "Vec3A" -%}
+        let v = self.0.neg().to_array();
+        Self::new(v[0], v[1], v[2])
+        {% elif storage == "simd_f32x4" -%}
+        Self(self.0.neg())
+        {% elif storage == "simd_f64x2" -%}
+        Self(self.0.neg())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].neg(), self.0[1].neg()])
+        {% elif is_int -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }}.wrapping_neg(){% if not loop.last %}, {% endif %}{% endfor %} }
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: -self.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+{% endif %}
+
+{% if is_int %}
+impl BitAnd for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: Self) -> Self {
+        Self { {% for c in components %}{{ c }}: self.{{ c }} & rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+    }
+}
+
+impl BitAnd<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: {{ scalar_t }}) -> Self {
+        self & Self::splat(rhs)
+    }
+}
+
+impl BitAndAssign for {{ self_t }} {
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = *self & rhs;
+    }
+}
+
+impl BitOr for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: Self) -> Self {
+        Self { {% for c in components %}{{ c }}: self.{{ c }} | rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+    }
+}
+
+impl BitOr<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: {{ scalar_t }}) -> Self {
+        self | Self::splat(rhs)
+    }
+}
+
+impl BitOrAssign for {{ self_t }} {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = *self | rhs;
+    }
+}
+
+impl BitXor for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: Self) -> Self {
+        Self { {% for c in components %}{{ c }}: self.{{ c }} ^ rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+    }
+}
+
+impl BitXor<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: {{ scalar_t }}) -> Self {
+        self ^ Self::splat(rhs)
+    }
+}
+
+impl BitXorAssign for {{ self_t }} {
+    #[inline(always)]
+    fn bitxor_assign(&mut self, rhs: Self) {
+        *self = *self ^ rhs;
+    }
+}
+
+impl Not for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn not(self) -> Self {
+        Self { {% for c in components %}{{ c }}: !self.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+    }
+}
+
+impl Shl<Self> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn shl(self, rhs: Self) -> Self {
+        Self { {% for c in components %}{{ c }}: self.{{ c }}.wrapping_shl({% if scalar_t == "u32" %}rhs.{{ c }}{% else %}rhs.{{ c }} as u32{% endif %}){% if not loop.last %}, {% endif %}{% endfor %} }
+    }
+}
+
+impl Shl<u32> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn shl(self, rhs: u32) -> Self {
+        Self { {% for c in components %}{{ c }}: self.{{ c }}.wrapping_shl(rhs){% if not loop.last %}, {% endif %}{% endfor %} }
+    }
+}
+
+impl ShlAssign<Self> for {{ self_t }} {
+    #[inline(always)]
+    fn shl_assign(&mut self, rhs: Self) {
+        *self = *self << rhs;
+    }
+}
+
+impl ShlAssign<u32> for {{ self_t }} {
+    #[inline(always)]
+    fn shl_assign(&mut self, rhs: u32) {
+        *self = *self << rhs;
+    }
+}
+
+impl Shr<Self> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn shr(self, rhs: Self) -> Self {
+        Self { {% for c in components %}{{ c }}: self.{{ c }}.wrapping_shr({% if scalar_t == "u32" %}rhs.{{ c }}{% else %}rhs.{{ c }} as u32{% endif %}){% if not loop.last %}, {% endif %}{% endfor %} }
+    }
+}
+
+impl Shr<u32> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn shr(self, rhs: u32) -> Self {
+        Self { {% for c in components %}{{ c }}: self.{{ c }}.wrapping_shr(rhs){% if not loop.last %}, {% endif %}{% endfor %} }
+    }
+}
+
+impl ShrAssign<Self> for {{ self_t }} {
+    #[inline(always)]
+    fn shr_assign(&mut self, rhs: Self) {
+        *self = *self >> rhs;
+    }
+}
+
+impl ShrAssign<u32> for {{ self_t }} {
+    #[inline(always)]
+    fn shr_assign(&mut self, rhs: u32) {
+        *self = *self >> rhs;
+    }
+}
+{% endif %}
+
+impl Sum for {{ self_t }} {
+    #[inline]
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::ZERO, Add::add)
+    }
+}
+
+impl<'a> Sum<&'a Self> for {{ self_t }} {
+    #[inline]
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Self::ZERO, |acc, &x| acc + x)
+    }
+}
+
+impl Product for {{ self_t }} {
+    #[inline]
+    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::ONE, Mul::mul)
+    }
+}
+
+impl<'a> Product<&'a Self> for {{ self_t }} {
+    #[inline]
+    fn product<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Self::ONE, |acc, &x| acc * x)
+    }
+}
+
+impl From<[{{ scalar_t }}; {{ dim }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn from(a: [{{ scalar_t }}; {{ dim }}]) -> Self {
+        Self::from_array(a)
+    }
+}
+
+impl From<{{ self_t }}> for [{{ scalar_t }}; {{ dim }}] {
+    #[inline(always)]
+    fn from(v: {{ self_t }}) -> Self {
+        v.to_array()
+    }
+}
+
+impl From<({% for c in components %}{{ scalar_t }}{% if not loop.last %}, {% endif %}{% endfor %})> for {{ self_t }} {
+    #[inline(always)]
+    fn from(t: ({% for c in components %}{{ scalar_t }}{% if not loop.last %}, {% endif %}{% endfor %})) -> Self {
+        Self::new({% for c in components %}t.{{ loop.index0 }}{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+}
+
+impl From<{{ self_t }}> for ({% for c in components %}{{ scalar_t }}{% if not loop.last %}, {% endif %}{% endfor %}) {
+    #[inline(always)]
+    fn from(v: {{ self_t }}) -> Self {
+        let a = v.to_array();
+        ({% for c in components %}a[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+}
+
+{% if self_t == "Vec3A" %}
+impl From<Vec3> for Vec3A {
+    #[inline(always)]
+    fn from(v: Vec3) -> Self {
+        Self::new(v.x, v.y, v.z)
+    }
+}
+{% elif self_t == "Vec3" %}
+impl From<Vec3A> for Vec3 {
+    #[inline(always)]
+    fn from(v: Vec3A) -> Self {
+        let a = v.to_array();
+        Self::new(a[0], a[1], a[2])
+    }
+}
+{% endif %}

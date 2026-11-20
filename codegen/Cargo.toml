@@ -1,0 +1,17 @@
+[package]
+name = "codegen"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+rustfmt-wrapper.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json.workspace = true
+tera.workspace = true
+
+[lints]
+workspace = true

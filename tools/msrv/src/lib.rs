@@ -1,1 +1,0 @@
-// The MSRV check only needs to compile glam with the target feature set.

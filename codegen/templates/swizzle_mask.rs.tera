@@ -1,0 +1,43 @@
+#![expect(
+    non_upper_case_globals,
+    reason = "GLSL swizzle mask constants use lowercase component names across xyzw, rgba, and stpq"
+)]
+
+use super::{M1, M2, M3, M4};
+
+{% set alphabets = [["x", "y", "z", "w"], ["r", "g", "b", "a"], ["s", "t", "p", "q"]] -%}
+{% for alpha in alphabets -%}
+{% for i in range(end=4) -%}
+pub const {{ alpha[i] }}: M1<{{ i }}> = M1;
+{% endfor -%}
+{% endfor -%}
+
+{% for alpha in alphabets -%}
+{% for i in range(end=4) -%}
+{% for j in range(end=4) -%}
+pub const {{ alpha[i] }}{{ alpha[j] }}: M2<{{ i }}, {{ j }}> = M2;
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+
+{% for alpha in alphabets -%}
+{% for i in range(end=4) -%}
+{% for j in range(end=4) -%}
+{% for k in range(end=4) -%}
+pub const {{ alpha[i] }}{{ alpha[j] }}{{ alpha[k] }}: M3<{{ i }}, {{ j }}, {{ k }}> = M3;
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+
+{% for alpha in alphabets -%}
+{% for i in range(end=4) -%}
+{% for j in range(end=4) -%}
+{% for k in range(end=4) -%}
+{% for l in range(end=4) -%}
+pub const {{ alpha[i] }}{{ alpha[j] }}{{ alpha[k] }}{{ alpha[l] }}: M4<{{ i }}, {{ j }}, {{ k }}, {{ l }}> = M4;
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}

@@ -1,0 +1,824 @@
+{% set col_names = ["x_axis", "y_axis", "z_axis", "w_axis"][:cols] -%}
+{% set row_comps = ["x", "y", "z", "w"][:rows] -%}
+{% set col_comps = ["x", "y", "z", "w"][:cols] -%}
+{% set elem_count = cols * rows -%}
+{% if is_f16 -%}
+use half::f16;
+{% endif -%}
+{% if storage == "simd_f32x4" or storage == "simd_f32x4_pair" -%}
+use crate::simd::SimdF32x4;
+use core::ops::{Deref, DerefMut};
+{% endif -%}
+use crate::{{ col_t }};
+{% if rhs_vec_t != col_t -%}
+use crate::{{ rhs_vec_t }};
+{% endif -%}
+{% if transpose_t != self_t -%}
+use crate::{{ transpose_t }};
+{% endif -%}
+{% for extra_use in extra_imports -%}
+use crate::{{ extra_use }};
+{% endfor -%}
+use core::fmt;
+use core::ops::{
+    Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign,
+};
+
+{% if storage == "simd_f32x4" %}
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(transparent)]
+pub struct {{ self_t }}(pub(crate) SimdF32x4);
+{% elif storage == "simd_f32x4_pair" %}
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C, align(16))]
+pub struct {{ self_t }}(pub(crate) [SimdF32x4; 2]);
+{% else %}
+#[derive(Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C)]
+pub struct {{ self_t }} {
+    {% for c in col_names -%}
+    pub {{ c }}: {{ col_t }},
+    {% endfor -%}
+}
+{% endif %}
+
+impl {{ self_t }} {
+    pub const ZERO: Self = Self::from_cols({% for c in col_names %}{{ col_t }}::ZERO{% if not loop.last %}, {% endif %}{% endfor %});
+    pub const NAN: Self = Self::from_cols({% for c in col_names %}{{ col_t }}::NAN{% if not loop.last %}, {% endif %}{% endfor %});
+    {% if cols == rows -%}
+    pub const IDENTITY: Self = Self::diagonal({{ one_lit }});
+    {% endif -%}
+
+    #[inline(always)]
+    pub(crate) const fn from_cols({% for c in col_names %}{{ c }}: {{ col_t }}{% if not loop.last %}, {% endif %}{% endfor %}) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(SimdF32x4::new(x_axis.x, x_axis.y, y_axis.x, y_axis.y))
+        {% elif storage == "simd_f32x4_pair" -%}
+        Self([
+            SimdF32x4::new(x_axis.x, x_axis.y, y_axis.x, y_axis.y),
+            SimdF32x4::new(z_axis.x, z_axis.y, w_axis.x, w_axis.y),
+        ])
+        {% else -%}
+        Self { {% for c in col_names %}{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) const fn diagonal(s: {{ scalar_t }}) -> Self {
+        Self::from_cols(
+            {% for c_idx in range(end=cols) -%}
+            {{ col_t }}::new(
+                {% for r_idx in range(end=rows) -%}
+                {% if c_idx == r_idx %}s{% else %}{{ zero_lit }}{% endif %}{% if not loop.last %}, {% endif %}
+                {% endfor -%}
+            ){% if not loop.last %},{% endif %}
+            {% endfor -%}
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) const fn col(self, idx: usize) -> {{ col_t }} {
+        {% if storage == "simd_f32x4" -%}
+        let a = self.0.to_array();
+        match idx {
+            0 => {{ col_t }}::new(a[0], a[1]),
+            _ => {{ col_t }}::new(a[2], a[3]),
+        }
+        {% elif storage == "simd_f32x4_pair" -%}
+        let a0 = self.0[0].to_array();
+        let a1 = self.0[1].to_array();
+        match idx {
+            0 => {{ col_t }}::new(a0[0], a0[1]),
+            1 => {{ col_t }}::new(a0[2], a0[3]),
+            2 => {{ col_t }}::new(a1[0], a1[1]),
+            _ => {{ col_t }}::new(a1[2], a1[3]),
+        }
+        {% else -%}
+        match idx {
+            {% for c in col_names -%}
+            {% if not loop.last -%}
+            {{ loop.index0 }} => self.{{ c }},
+            {% else -%}
+            _ => self.{{ c }},
+            {% endif -%}
+            {% endfor -%}
+        }
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) const fn from_cols_array(m: [{{ scalar_t }}; {{ elem_count }}]) -> Self {
+        Self::from_cols(
+            {% for c_idx in range(end=cols) -%}
+            {{ col_t }}::new(
+                {% for r_idx in range(end=rows) -%}
+                m[{{ c_idx * rows + r_idx }}]{% if not loop.last %}, {% endif %}
+                {% endfor -%}
+            ){% if not loop.last %},{% endif %}
+            {% endfor -%}
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) const fn to_cols_array(self) -> [{{ scalar_t }}; {{ elem_count }}] {
+        {% for c_idx in range(end=cols) -%}
+        let c{{ c_idx }} = self.col({{ c_idx }}).to_array();
+        {% endfor -%}
+        [
+            {% for c_idx in range(end=cols) -%}
+            {% for r_idx in range(end=rows) -%}
+            c{{ c_idx }}[{{ r_idx }}]{% if not (c_idx == cols - 1 and r_idx == rows - 1) %}, {% endif %}
+            {% endfor -%}
+            {% endfor -%}
+        ]
+    }
+
+    #[inline(always)]
+    pub(crate) const fn from_cols_array_2d(m: [[{{ scalar_t }}; {{ rows }}]; {{ cols }}]) -> Self {
+        Self::from_cols(
+            {% for c_idx in range(end=cols) -%}
+            {{ col_t }}::from_array(m[{{ c_idx }}]){% if not loop.last %},{% endif %}
+            {% endfor -%}
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) const fn to_cols_array_2d(self) -> [[{{ scalar_t }}; {{ rows }}]; {{ cols }}] {
+        [
+            {% for c_idx in range(end=cols) -%}
+            self.col({{ c_idx }}).to_array(){% if not loop.last %},{% endif %}
+            {% endfor -%}
+        ]
+    }
+
+    #[inline(always)]
+    pub(crate) fn matrix_comp_mult(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.mul(rhs.0))
+        {% elif storage == "simd_f32x4_pair" -%}
+        Self([self.0[0].mul(rhs.0[0]), self.0[1].mul(rhs.0[1])])
+        {% else -%}
+        Self::from_cols(
+            {% for c in col_names -%}
+            self.{{ c }} * rhs.{{ c }}{% if not loop.last %},{% endif %}
+            {% endfor -%}
+        )
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn transpose(self) -> {{ transpose_t }} {
+        {% for c_idx in range(end=cols) -%}
+        let c{{ c_idx }} = self.col({{ c_idx }}).to_array();
+        {% endfor -%}
+        {{ transpose_t }}::from_cols(
+            {% for r_idx in range(end=rows) -%}
+            {{ transpose_col_t }}::new(
+                {% for c_idx in range(end=cols) -%}
+                c{{ c_idx }}[{{ r_idx }}]{% if not loop.last %}, {% endif %}
+                {% endfor -%}
+            ){% if not loop.last %},{% endif %}
+            {% endfor -%}
+        )
+    }
+
+    {% if cols == rows %}
+    #[inline]
+    pub(crate) fn determinant(self) -> {{ scalar_t }} {
+        {% if is_f16 -%}
+        {% for c_idx in range(end=cols) -%}
+        let c{{ c_idx }} = self.col({{ c_idx }}).to_array();
+        {% endfor -%}
+        {% if cols == 2 -%}
+        f16::from_f32(c0[0].to_f32() * c1[1].to_f32() - c0[1].to_f32() * c1[0].to_f32())
+        {% elif cols == 3 -%}
+        let m00 = c0[0].to_f32();
+        let m01 = c0[1].to_f32();
+        let m02 = c0[2].to_f32();
+        let m10 = c1[0].to_f32();
+        let m11 = c1[1].to_f32();
+        let m12 = c1[2].to_f32();
+        let m20 = c2[0].to_f32();
+        let m21 = c2[1].to_f32();
+        let m22 = c2[2].to_f32();
+        f16::from_f32(
+            m00 * (m11 * m22 - m12 * m21)
+                + m01 * (m12 * m20 - m10 * m22)
+                + m02 * (m10 * m21 - m11 * m20),
+        )
+        {% else -%}
+        let m0 = [c0[0].to_f32(), c0[1].to_f32(), c0[2].to_f32(), c0[3].to_f32()];
+        let m1 = [c1[0].to_f32(), c1[1].to_f32(), c1[2].to_f32(), c1[3].to_f32()];
+        let m2 = [c2[0].to_f32(), c2[1].to_f32(), c2[2].to_f32(), c2[3].to_f32()];
+        let m3 = [c3[0].to_f32(), c3[1].to_f32(), c3[2].to_f32(), c3[3].to_f32()];
+        let s0 = m0[0] * m1[1] - m1[0] * m0[1];
+        let s1 = m0[0] * m2[1] - m2[0] * m0[1];
+        let s2 = m0[0] * m3[1] - m3[0] * m0[1];
+        let s3 = m1[0] * m2[1] - m2[0] * m1[1];
+        let s4 = m1[0] * m3[1] - m3[0] * m1[1];
+        let s5 = m2[0] * m3[1] - m3[0] * m2[1];
+        let k5 = m2[2] * m3[3] - m3[2] * m2[3];
+        let k4 = m1[2] * m3[3] - m3[2] * m1[3];
+        let k3 = m1[2] * m2[3] - m2[2] * m1[3];
+        let k2 = m0[2] * m3[3] - m3[2] * m0[3];
+        let k1 = m0[2] * m2[3] - m2[2] * m0[3];
+        let k0 = m0[2] * m1[3] - m1[2] * m0[3];
+        f16::from_f32(s0 * k5 - s1 * k4 + s2 * k3 + s3 * k2 - s4 * k1 + s5 * k0)
+        {% endif -%}
+        {% else -%}
+        {% if cols == 2 -%}
+        let c0 = self.col(0).to_array();
+        let c1 = self.col(1).to_array();
+        c0[0] * c1[1] - c0[1] * c1[0]
+        {% elif cols == 3 -%}
+        self.x_axis.dot(self.y_axis.cross(self.z_axis))
+        {% elif self_t == "Mat4" -%}
+        crate::simd::SimdF32x4::mat4_determinant(self.x_axis.0, self.y_axis.0, self.z_axis.0, self.w_axis.0)
+        {% else -%}
+        let m0 = self.x_axis.to_array();
+        let m1 = self.y_axis.to_array();
+        let m2 = self.z_axis.to_array();
+        let m3 = self.w_axis.to_array();
+        let s0 = m0[0] * m1[1] - m1[0] * m0[1];
+        let s1 = m0[0] * m2[1] - m2[0] * m0[1];
+        let s2 = m0[0] * m3[1] - m3[0] * m0[1];
+        let s3 = m1[0] * m2[1] - m2[0] * m1[1];
+        let s4 = m1[0] * m3[1] - m3[0] * m1[1];
+        let s5 = m2[0] * m3[1] - m3[0] * m2[1];
+        let k5 = m2[2] * m3[3] - m3[2] * m2[3];
+        let k4 = m1[2] * m3[3] - m3[2] * m1[3];
+        let k3 = m1[2] * m2[3] - m2[2] * m1[3];
+        let k2 = m0[2] * m3[3] - m3[2] * m0[3];
+        let k1 = m0[2] * m2[3] - m2[2] * m0[3];
+        let k0 = m0[2] * m1[3] - m1[2] * m0[3];
+        s0 * k5 - s1 * k4 + s2 * k3 + s3 * k2 - s4 * k1 + s5 * k0
+        {% endif -%}
+        {% endif -%}
+    }
+
+    #[inline]
+    pub(crate) fn inverse(self) -> Self {
+        {% if is_f16 -%}
+        {% for c_idx in range(end=cols) -%}
+        let c{{ c_idx }} = self.col({{ c_idx }}).to_array();
+        {% endfor -%}
+        {% if cols == 2 -%}
+        let a = c0[0].to_f32();
+        let b = c0[1].to_f32();
+        let c = c1[0].to_f32();
+        let d = c1[1].to_f32();
+        let det = a * d - b * c;
+        rglm_debug_assert!(det != 0.0);
+        let inv_det = 1.0 / det;
+        Self::from_cols(
+            {{ col_t }}::new(f16::from_f32(d * inv_det), f16::from_f32(-b * inv_det)),
+            {{ col_t }}::new(f16::from_f32(-c * inv_det), f16::from_f32(a * inv_det)),
+        )
+        {% elif cols == 3 -%}
+        let m = crate::Mat3::from_cols(
+            crate::Vec3::new(c0[0].to_f32(), c0[1].to_f32(), c0[2].to_f32()),
+            crate::Vec3::new(c1[0].to_f32(), c1[1].to_f32(), c1[2].to_f32()),
+            crate::Vec3::new(c2[0].to_f32(), c2[1].to_f32(), c2[2].to_f32()),
+        )
+        .inverse();
+        Self::from_cols(
+            {{ col_t }}::new(f16::from_f32(m.x_axis.x), f16::from_f32(m.x_axis.y), f16::from_f32(m.x_axis.z)),
+            {{ col_t }}::new(f16::from_f32(m.y_axis.x), f16::from_f32(m.y_axis.y), f16::from_f32(m.y_axis.z)),
+            {{ col_t }}::new(f16::from_f32(m.z_axis.x), f16::from_f32(m.z_axis.y), f16::from_f32(m.z_axis.z)),
+        )
+        {% else -%}
+        let m = crate::Mat4::from_cols(
+            crate::Vec4::new(c0[0].to_f32(), c0[1].to_f32(), c0[2].to_f32(), c0[3].to_f32()),
+            crate::Vec4::new(c1[0].to_f32(), c1[1].to_f32(), c1[2].to_f32(), c1[3].to_f32()),
+            crate::Vec4::new(c2[0].to_f32(), c2[1].to_f32(), c2[2].to_f32(), c2[3].to_f32()),
+            crate::Vec4::new(c3[0].to_f32(), c3[1].to_f32(), c3[2].to_f32(), c3[3].to_f32()),
+        )
+        .inverse();
+        let r0 = m.x_axis.to_array();
+        let r1 = m.y_axis.to_array();
+        let r2 = m.z_axis.to_array();
+        let r3 = m.w_axis.to_array();
+        Self::from_cols(
+            {{ col_t }}::new(f16::from_f32(r0[0]), f16::from_f32(r0[1]), f16::from_f32(r0[2]), f16::from_f32(r0[3])),
+            {{ col_t }}::new(f16::from_f32(r1[0]), f16::from_f32(r1[1]), f16::from_f32(r1[2]), f16::from_f32(r1[3])),
+            {{ col_t }}::new(f16::from_f32(r2[0]), f16::from_f32(r2[1]), f16::from_f32(r2[2]), f16::from_f32(r2[3])),
+            {{ col_t }}::new(f16::from_f32(r3[0]), f16::from_f32(r3[1]), f16::from_f32(r3[2]), f16::from_f32(r3[3])),
+        )
+        {% endif -%}
+        {% elif cols == 2 -%}
+        let c0 = self.col(0).to_array();
+        let c1 = self.col(1).to_array();
+        let det = c0[0] * c1[1] - c0[1] * c1[0];
+        rglm_debug_assert!(det != {{ zero_lit }});
+        let inv_det = {{ one_lit }} / det;
+        Self::from_cols(
+            {{ col_t }}::new(c1[1] * inv_det, -c0[1] * inv_det),
+            {{ col_t }}::new(-c1[0] * inv_det, c0[0] * inv_det),
+        )
+        {% elif cols == 3 -%}
+        let k0 = self.y_axis.cross(self.z_axis);
+        let k1 = self.z_axis.cross(self.x_axis);
+        let k2 = self.x_axis.cross(self.y_axis);
+        let det = self.x_axis.dot(k0);
+        rglm_debug_assert!(det != {{ zero_lit }});
+        let inv_det = {{ one_lit }} / det;
+        Self::from_cols(k0 * inv_det, k1 * inv_det, k2 * inv_det).transpose()
+        {% elif self_t == "Mat4" -%}
+        let [c0, c1, c2, c3] = crate::simd::SimdF32x4::mat4_inverse(
+            self.x_axis.0,
+            self.y_axis.0,
+            self.z_axis.0,
+            self.w_axis.0,
+        );
+        Self::from_cols(
+            crate::Vec4(c0),
+            crate::Vec4(c1),
+            crate::Vec4(c2),
+            crate::Vec4(c3),
+        )
+        {% else -%}
+        let m0 = self.x_axis.to_array();
+        let m1 = self.y_axis.to_array();
+        let m2 = self.z_axis.to_array();
+        let m3 = self.w_axis.to_array();
+        let coef00 = m2[2] * m3[3] - m3[2] * m2[3];
+        let coef02 = m1[2] * m3[3] - m3[2] * m1[3];
+        let coef03 = m1[2] * m2[3] - m2[2] * m1[3];
+        let coef04 = m2[1] * m3[3] - m3[1] * m2[3];
+        let coef06 = m1[1] * m3[3] - m3[1] * m1[3];
+        let coef07 = m1[1] * m2[3] - m2[1] * m1[3];
+        let coef08 = m2[1] * m3[2] - m3[1] * m2[2];
+        let coef10 = m1[1] * m3[2] - m3[1] * m1[2];
+        let coef11 = m1[1] * m2[2] - m2[1] * m1[2];
+        let coef12 = m2[0] * m3[3] - m3[0] * m2[3];
+        let coef14 = m1[0] * m3[3] - m3[0] * m1[3];
+        let coef15 = m1[0] * m2[3] - m2[0] * m1[3];
+        let coef16 = m2[0] * m3[2] - m3[0] * m2[2];
+        let coef18 = m1[0] * m3[2] - m3[0] * m1[2];
+        let coef19 = m1[0] * m2[2] - m2[0] * m1[2];
+        let coef20 = m2[0] * m3[1] - m3[0] * m2[1];
+        let coef22 = m1[0] * m3[1] - m3[0] * m1[1];
+        let coef23 = m1[0] * m2[1] - m2[0] * m1[1];
+
+        let fac0 = {{ col_t }}::new(coef00, coef00, coef02, coef03);
+        let fac1 = {{ col_t }}::new(coef04, coef04, coef06, coef07);
+        let fac2 = {{ col_t }}::new(coef08, coef08, coef10, coef11);
+        let fac3 = {{ col_t }}::new(coef12, coef12, coef14, coef15);
+        let fac4 = {{ col_t }}::new(coef16, coef16, coef18, coef19);
+        let fac5 = {{ col_t }}::new(coef20, coef20, coef22, coef23);
+
+        let vec0 = {{ col_t }}::new(m1[0], m0[0], m0[0], m0[0]);
+        let vec1 = {{ col_t }}::new(m1[1], m0[1], m0[1], m0[1]);
+        let vec2 = {{ col_t }}::new(m1[2], m0[2], m0[2], m0[2]);
+        let vec3 = {{ col_t }}::new(m1[3], m0[3], m0[3], m0[3]);
+
+        let inv0 = vec1 * fac0 - vec2 * fac1 + vec3 * fac2;
+        let inv1 = vec0 * fac0 - vec2 * fac3 + vec3 * fac4;
+        let inv2 = vec0 * fac1 - vec1 * fac3 + vec3 * fac5;
+        let inv3 = vec0 * fac2 - vec1 * fac4 + vec2 * fac5;
+
+        let sign_a = {{ col_t }}::new({{ one_lit }}, {{ neg_one_lit }}, {{ one_lit }}, {{ neg_one_lit }});
+        let sign_b = {{ col_t }}::new({{ neg_one_lit }}, {{ one_lit }}, {{ neg_one_lit }}, {{ one_lit }});
+        let c0_inv = inv0 * sign_a;
+        let c1_inv = inv1 * sign_b;
+        let c2_inv = inv2 * sign_a;
+        let c3_inv = inv3 * sign_b;
+
+        let row0 = {{ col_t }}::new(c0_inv.x, c1_inv.x, c2_inv.x, c3_inv.x);
+        let det = self.x_axis.dot(row0);
+        rglm_debug_assert!(det != {{ zero_lit }});
+        let inv_det = {{ one_lit }} / det;
+        Self::from_cols(
+            c0_inv * inv_det,
+            c1_inv * inv_det,
+            c2_inv * inv_det,
+            c3_inv * inv_det,
+        )
+        {% endif -%}
+    }
+    {% endif %}
+}
+
+impl Default for {{ self_t }} {
+    #[inline(always)]
+    fn default() -> Self {
+        {% if cols == rows -%}
+        Self::IDENTITY
+        {% else -%}
+        Self::ZERO
+        {% endif -%}
+    }
+}
+
+{% if storage != "cols" %}
+impl PartialEq for {{ self_t }} {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.to_cols_array() == other.to_cols_array()
+    }
+}
+
+impl Deref for {{ self_t }} {
+    type Target = crate::deref::Cols{{ cols }}<{{ col_t }}>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} stores {{ cols }} contiguous {{ col_t }} columns"
+        )]
+        unsafe {
+            &*(core::ptr::from_ref(self).cast::<Self::Target>())
+        }
+    }
+}
+
+impl DerefMut for {{ self_t }} {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} stores {{ cols }} contiguous {{ col_t }} columns"
+        )]
+        unsafe {
+            &mut *(core::ptr::from_mut(self).cast::<Self::Target>())
+        }
+    }
+}
+{% endif %}
+
+impl fmt::Debug for {{ self_t }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(stringify!({{ self_t }}))
+            {% for c in col_names -%}
+            .field("{{ c }}", &self.{{ c }})
+            {% endfor -%}
+            .finish()
+    }
+}
+
+impl fmt::Display for {{ self_t }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[{% for c in col_names %}{{ "{}" }}{% if not loop.last %}, {% endif %}{% endfor %}]",
+            {% for c in col_names %}self.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %}
+        )
+    }
+}
+
+impl AsRef<[{{ col_t }}; {{ cols }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn as_ref(&self) -> &[{{ col_t }}; {{ cols }}] {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} consists of {{ cols }} contiguous {{ col_t }} columns"
+        )]
+        unsafe {
+            &*(core::ptr::from_ref(self).cast::<[{{ col_t }}; {{ cols }}]>())
+        }
+    }
+}
+
+impl AsMut<[{{ col_t }}; {{ cols }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn as_mut(&mut self) -> &mut [{{ col_t }}; {{ cols }}] {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} consists of {{ cols }} contiguous {{ col_t }} columns"
+        )]
+        unsafe {
+            &mut *(core::ptr::from_mut(self).cast::<[{{ col_t }}; {{ cols }}]>())
+        }
+    }
+}
+
+impl Index<usize> for {{ self_t }} {
+    type Output = {{ col_t }};
+
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.as_ref()[index]
+    }
+}
+
+impl IndexMut<usize> for {{ self_t }} {
+    #[inline(always)]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.as_mut()[index]
+    }
+}
+
+impl Add for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.add(rhs.0))
+        {% elif storage == "simd_f32x4_pair" -%}
+        Self([self.0[0].add(rhs.0[0]), self.0[1].add(rhs.0[1])])
+        {% else -%}
+        Self::from_cols({% for c in col_names %}self.{{ c }} + rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+}
+
+impl Add<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, rhs: {{ scalar_t }}) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.add(SimdF32x4::splat(rhs)))
+        {% elif storage == "simd_f32x4_pair" -%}
+        let s = SimdF32x4::splat(rhs);
+        Self([self.0[0].add(s), self.0[1].add(s)])
+        {% else -%}
+        Self::from_cols({% for c in col_names %}self.{{ c }} + rhs{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+}
+
+impl Add<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn add(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        rhs + self
+    }
+}
+
+impl AddAssign for {{ self_t }} {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl AddAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.sub(rhs.0))
+        {% elif storage == "simd_f32x4_pair" -%}
+        Self([self.0[0].sub(rhs.0[0]), self.0[1].sub(rhs.0[1])])
+        {% else -%}
+        Self::from_cols({% for c in col_names %}self.{{ c }} - rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+}
+
+impl Sub<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn sub(self, rhs: {{ scalar_t }}) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.sub(SimdF32x4::splat(rhs)))
+        {% elif storage == "simd_f32x4_pair" -%}
+        let s = SimdF32x4::splat(rhs);
+        Self([self.0[0].sub(s), self.0[1].sub(s)])
+        {% else -%}
+        Self::from_cols({% for c in col_names %}self.{{ c }} - rhs{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+}
+
+impl Sub<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn sub(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        {% if storage == "simd_f32x4" -%}
+        {{ self_t }}(SimdF32x4::splat(self).sub(rhs.0))
+        {% elif storage == "simd_f32x4_pair" -%}
+        let s = SimdF32x4::splat(self);
+        {{ self_t }}([s.sub(rhs.0[0]), s.sub(rhs.0[1])])
+        {% else -%}
+        {{ self_t }}::from_cols({% for c in col_names %}self - rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+}
+
+impl SubAssign for {{ self_t }} {
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl SubAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self - rhs;
+    }
+}
+
+impl Neg for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn neg(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.neg())
+        {% elif storage == "simd_f32x4_pair" -%}
+        Self([self.0[0].neg(), self.0[1].neg()])
+        {% else -%}
+        Self::from_cols({% for c in col_names %}-self.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+}
+
+impl Mul<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn mul(self, rhs: {{ scalar_t }}) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.mul(SimdF32x4::splat(rhs)))
+        {% elif storage == "simd_f32x4_pair" -%}
+        let s = SimdF32x4::splat(rhs);
+        Self([self.0[0].mul(s), self.0[1].mul(s)])
+        {% else -%}
+        Self::from_cols({% for c in col_names %}self.{{ c }} * rhs{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+}
+
+impl Mul<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn mul(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        rhs * self
+    }
+}
+
+impl MulAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self * rhs;
+    }
+}
+
+impl Div<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn div(self, rhs: {{ scalar_t }}) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.div(SimdF32x4::splat(rhs)))
+        {% elif storage == "simd_f32x4_pair" -%}
+        let s = SimdF32x4::splat(rhs);
+        Self([self.0[0].div(s), self.0[1].div(s)])
+        {% else -%}
+        Self::from_cols({% for c in col_names %}self.{{ c }} / rhs{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+}
+
+impl Div<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn div(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        {% if storage == "simd_f32x4" -%}
+        {{ self_t }}(SimdF32x4::splat(self).div(rhs.0))
+        {% elif storage == "simd_f32x4_pair" -%}
+        let s = SimdF32x4::splat(self);
+        {{ self_t }}([s.div(rhs.0[0]), s.div(rhs.0[1])])
+        {% else -%}
+        {{ self_t }}::from_cols({% for c in col_names %}self / rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %})
+        {% endif -%}
+    }
+}
+
+impl DivAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn div_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self / rhs;
+    }
+}
+
+impl Mul<{{ rhs_vec_t }}> for {{ self_t }} {
+    type Output = {{ col_t }};
+    #[inline(always)]
+    fn mul(self, rhs: {{ rhs_vec_t }}) -> {{ col_t }} {
+        {% if self_t == "Mat4" or self_t == "Mat4x3A" -%}
+        let mut res = self.x_axis.0.mul(rhs.0.swizzle::<0, 0, 0, 0>());
+        res = self.y_axis.0.mul_add(rhs.0.swizzle::<1, 1, 1, 1>(), res);
+        res = self.z_axis.0.mul_add(rhs.0.swizzle::<2, 2, 2, 2>(), res);
+        res = self.w_axis.0.mul_add(rhs.0.swizzle::<3, 3, 3, 3>(), res);
+        {{ col_t }}(res)
+        {% elif self_t == "Mat3A" -%}
+        let mut res = self.x_axis.0.mul(rhs.0.swizzle::<0, 0, 0, 0>());
+        res = self.y_axis.0.mul_add(rhs.0.swizzle::<1, 1, 1, 1>(), res);
+        res = self.z_axis.0.mul_add(rhs.0.swizzle::<2, 2, 2, 2>(), res);
+        {{ col_t }}(res)
+        {% else -%}
+        let r = rhs.to_array();
+        let mut res = self.x_axis * r[0];
+        res = self.y_axis.mul_add({{ col_t }}::splat(r[1]), res);
+        {% if cols >= 3 -%}
+        res = self.z_axis.mul_add({{ col_t }}::splat(r[2]), res);
+        {% endif -%}
+        {% if cols >= 4 -%}
+        res = self.w_axis.mul_add({{ col_t }}::splat(r[3]), res);
+        {% endif -%}
+        res
+        {% endif -%}
+    }
+}
+
+impl Mul<{{ self_t }}> for {{ col_t }} {
+    type Output = {{ rhs_vec_t }};
+    #[inline(always)]
+    fn mul(self, rhs: {{ self_t }}) -> {{ rhs_vec_t }} {
+        {{ rhs_vec_t }}::new(
+            {% for c in col_names -%}
+            self.dot(rhs.{{ c }}){% if not loop.last %},{% endif %}
+            {% endfor -%}
+        )
+    }
+}
+
+{% if self_t == "Mat3A" %}
+impl Mul<crate::Vec3> for Mat3A {
+    type Output = crate::Vec3;
+    #[inline(always)]
+    fn mul(self, rhs: crate::Vec3) -> crate::Vec3 {
+        crate::Vec3::from(self * crate::Vec3A::from(rhs))
+    }
+}
+
+impl Mul<Mat3A> for crate::Vec3 {
+    type Output = crate::Vec3;
+    #[inline(always)]
+    fn mul(self, rhs: Mat3A) -> crate::Vec3 {
+        crate::Vec3::from(crate::Vec3A::from(self) * rhs)
+    }
+}
+{% endif %}
+
+{% if cols == rows %}
+impl MulAssign<{{ self_t }}> for {{ col_t }} {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: {{ self_t }}) {
+        *self = *self * rhs;
+    }
+}
+{% endif %}
+
+{% for mt in mul_targets %}
+impl Mul<{{ mt.rhs_mat_t }}> for {{ self_t }} {
+    type Output = {{ mt.out_mat_t }};
+    #[inline]
+    fn mul(self, rhs: {{ mt.rhs_mat_t }}) -> {{ mt.out_mat_t }} {
+        {% set rhs_cols_list = ["x_axis", "y_axis", "z_axis", "w_axis"][:mt.rhs_cols] -%}
+        {{ mt.out_mat_t }}::from_cols(
+            {% for rc in rhs_cols_list -%}
+            self * rhs.{{ rc }}{% if not loop.last %},{% endif %}
+            {% endfor -%}
+        )
+    }
+}
+{% endfor %}
+
+{% if cols == rows %}
+impl MulAssign for {{ self_t }} {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+{% endif %}
+
+impl From<[[{{ scalar_t }}; {{ rows }}]; {{ cols }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn from(m: [[{{ scalar_t }}; {{ rows }}]; {{ cols }}]) -> Self {
+        Self::from_cols_array_2d(m)
+    }
+}
+
+impl From<{{ self_t }}> for [[{{ scalar_t }}; {{ rows }}]; {{ cols }}] {
+    #[inline(always)]
+    fn from(m: {{ self_t }}) -> Self {
+        m.to_cols_array_2d()
+    }
+}
+
+impl From<[{{ scalar_t }}; {{ elem_count }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn from(m: [{{ scalar_t }}; {{ elem_count }}]) -> Self {
+        Self::from_cols_array(m)
+    }
+}
+
+impl From<{{ self_t }}> for [{{ scalar_t }}; {{ elem_count }}] {
+    #[inline(always)]
+    fn from(m: {{ self_t }}) -> Self {
+        m.to_cols_array()
+    }
+}

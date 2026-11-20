@@ -1,0 +1,374 @@
+{% set components = ["x", "y", "z", "w"][:dim] -%}
+{% if is_simd -%}
+use crate::simd::SimdMask32x4;
+{% endif -%}
+{% if dim == 3 and is_simd -%}
+use crate::BVec3;
+{% elif dim == 3 and not is_simd -%}
+use crate::BVec3A;
+{% elif dim == 4 and is_simd -%}
+use crate::BVec4;
+{% elif dim == 4 and not is_simd -%}
+use crate::BVec4A;
+{% endif -%}
+use core::fmt;
+{% if is_simd -%}
+use core::hash::{Hash, Hasher};
+{% endif -%}
+use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Index, Not};
+{% if not is_simd -%}
+use core::ops::IndexMut;
+{% endif -%}
+
+{% if is_simd %}
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(transparent)]
+pub struct {{ self_t }}(pub(crate) SimdMask32x4);
+{% else %}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(C)]
+pub struct {{ self_t }} {
+    {% for c in components -%}
+    pub {{ c }}: bool,
+    {% endfor -%}
+}
+{% endif %}
+
+impl {{ self_t }} {
+    pub const FALSE: Self = Self::splat(false);
+    pub const TRUE: Self = Self::splat(true);
+
+    #[inline(always)]
+    pub(crate) const fn new({% for c in components %}{{ c }}: bool{% if not loop.last %}, {% endif %}{% endfor %}) -> Self {
+        {% if is_simd and dim == 3 -%}
+        Self(SimdMask32x4::new3(x, y, z))
+        {% elif is_simd and dim == 4 -%}
+        Self(SimdMask32x4::new(x, y, z, w))
+        {% else -%}
+        Self { {% for c in components %}{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) const fn splat(v: bool) -> Self {
+        Self::new({% for c in components %}v{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+
+    #[inline(always)]
+    pub(crate) const fn from_array(a: [bool; {{ dim }}]) -> Self {
+        Self::new({% for c in components %}a[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+
+    #[inline(always)]
+    pub(crate) const fn to_array(self) -> [bool; {{ dim }}] {
+        {% if is_simd -%}
+        let a = self.0.to_bool_array();
+        [{% for c in components %}a[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %}]
+        {% else -%}
+        [{% for c in components %}self.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %}]
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn bitmask(self) -> u32 {
+        {% if is_simd and dim == 3 -%}
+        self.0.bitmask3()
+        {% elif is_simd and dim == 4 -%}
+        self.0.bitmask4()
+        {% else -%}
+        {% for c in components %}{% if loop.first %}(self.{{ c }} as u32){% else %} | ((self.{{ c }} as u32) << {{ loop.index0 }}){% endif %}{% endfor %}
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn any(self) -> bool {
+        {% if is_simd and dim == 3 -%}
+        self.0.any3()
+        {% elif is_simd and dim == 4 -%}
+        self.0.any4()
+        {% else -%}
+        {% for c in components %}{% if not loop.first %} || {% endif %}self.{{ c }}{% endfor %}
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn all(self) -> bool {
+        {% if is_simd and dim == 3 -%}
+        self.0.all3()
+        {% elif is_simd and dim == 4 -%}
+        self.0.all4()
+        {% else -%}
+        {% for c in components %}{% if not loop.first %} && {% endif %}self.{{ c }}{% endfor %}
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) const fn test(self, idx: usize) -> bool {
+        self.to_array()[idx]
+    }
+
+    #[inline(always)]
+    pub(crate) fn set(&mut self, idx: usize, val: bool) {
+        {% if is_simd -%}
+        self.0.set(idx, val);
+        {% else -%}
+        self.as_mut()[idx] = val;
+        {% endif -%}
+    }
+}
+
+{% if is_simd %}
+impl Default for {{ self_t }} {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::FALSE
+    }
+}
+
+impl PartialEq for {{ self_t }} {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.bitmask() == other.bitmask()
+    }
+}
+
+impl Eq for {{ self_t }} {}
+
+impl Hash for {{ self_t }} {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.to_array().hash(state);
+    }
+}
+{% endif %}
+
+impl fmt::Debug for {{ self_t }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let a = self.to_array();
+        f.debug_tuple(stringify!({{ self_t }}))
+            {% for c in components -%}
+            .field(&a[{{ loop.index0 }}])
+            {% endfor -%}
+            .finish()
+    }
+}
+
+impl fmt::Display for {{ self_t }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let a = self.to_array();
+        write!(f, "[{% for c in components %}{{ "{}" }}{% if not loop.last %}, {% endif %}{% endfor %}]", {% for c in components %}a[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+}
+
+impl Index<usize> for {{ self_t }} {
+    type Output = bool;
+
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Self::Output {
+        {% if is_simd -%}
+        static TRUE_VAL: bool = true;
+        static FALSE_VAL: bool = false;
+        if self.to_array()[index] {
+            &TRUE_VAL
+        } else {
+            &FALSE_VAL
+        }
+        {% else -%}
+        let slice: &[bool; {{ dim }}] = self.as_ref();
+        &slice[index]
+        {% endif -%}
+    }
+}
+
+{% if not is_simd %}
+impl IndexMut<usize> for {{ self_t }} {
+    #[inline(always)]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        let slice: &mut [bool; {{ dim }}] = self.as_mut();
+        &mut slice[index]
+    }
+}
+
+impl AsRef<[bool; {{ dim }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn as_ref(&self) -> &[bool; {{ dim }}] {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} is repr(C) of {{ dim }} contiguous bool fields"
+        )]
+        unsafe {
+            &*(core::ptr::from_ref(self).cast::<[bool; {{ dim }}]>())
+        }
+    }
+}
+
+impl AsMut<[bool; {{ dim }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn as_mut(&mut self) -> &mut [bool; {{ dim }}] {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} is repr(C) of {{ dim }} contiguous bool fields"
+        )]
+        unsafe {
+            &mut *(core::ptr::from_mut(self).cast::<[bool; {{ dim }}]>())
+        }
+    }
+}
+{% endif %}
+
+impl BitAnd for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: Self) -> Self {
+        {% if is_simd -%}
+        Self(self.0.bitand(rhs.0))
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }} & rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+
+impl BitAnd<bool> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: bool) -> Self {
+        self & Self::splat(rhs)
+    }
+}
+
+impl BitAndAssign for {{ self_t }} {
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = *self & rhs;
+    }
+}
+
+impl BitOr for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: Self) -> Self {
+        {% if is_simd -%}
+        Self(self.0.bitor(rhs.0))
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }} | rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+
+impl BitOr<bool> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: bool) -> Self {
+        self | Self::splat(rhs)
+    }
+}
+
+impl BitOrAssign for {{ self_t }} {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = *self | rhs;
+    }
+}
+
+impl BitXor for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: Self) -> Self {
+        {% if is_simd -%}
+        Self(self.0.bitxor(rhs.0))
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: self.{{ c }} ^ rhs.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+
+impl BitXor<bool> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: bool) -> Self {
+        self ^ Self::splat(rhs)
+    }
+}
+
+impl BitXorAssign for {{ self_t }} {
+    #[inline(always)]
+    fn bitxor_assign(&mut self, rhs: Self) {
+        *self = *self ^ rhs;
+    }
+}
+
+impl Not for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn not(self) -> Self {
+        {% if is_simd and dim == 3 -%}
+        Self(self.0.not3())
+        {% elif is_simd and dim == 4 -%}
+        Self(self.0.not())
+        {% else -%}
+        Self { {% for c in components %}{{ c }}: !self.{{ c }}{% if not loop.last %}, {% endif %}{% endfor %} }
+        {% endif -%}
+    }
+}
+
+impl From<[bool; {{ dim }}]> for {{ self_t }} {
+    #[inline(always)]
+    fn from(a: [bool; {{ dim }}]) -> Self {
+        Self::from_array(a)
+    }
+}
+
+impl From<{{ self_t }}> for [bool; {{ dim }}] {
+    #[inline(always)]
+    fn from(v: {{ self_t }}) -> Self {
+        v.to_array()
+    }
+}
+
+impl From<({% for c in components %}bool{% if not loop.last %}, {% endif %}{% endfor %})> for {{ self_t }} {
+    #[inline(always)]
+    fn from(t: ({% for c in components %}bool{% if not loop.last %}, {% endif %}{% endfor %})) -> Self {
+        Self::new({% for c in components %}t.{{ loop.index0 }}{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+}
+
+impl From<{{ self_t }}> for ({% for c in components %}bool{% if not loop.last %}, {% endif %}{% endfor %}) {
+    #[inline(always)]
+    fn from(v: {{ self_t }}) -> Self {
+        let a = v.to_array();
+        ({% for c in components %}a[{{ loop.index0 }}]{% if not loop.last %}, {% endif %}{% endfor %})
+    }
+}
+
+{% if dim == 3 and is_simd %}
+impl From<BVec3> for BVec3A {
+    #[inline(always)]
+    fn from(v: BVec3) -> Self {
+        Self::new(v.x, v.y, v.z)
+    }
+}
+{% elif dim == 3 and not is_simd %}
+impl From<BVec3A> for BVec3 {
+    #[inline(always)]
+    fn from(v: BVec3A) -> Self {
+        let a = v.to_array();
+        Self::new(a[0], a[1], a[2])
+    }
+}
+{% elif dim == 4 and is_simd %}
+impl From<BVec4> for BVec4A {
+    #[inline(always)]
+    fn from(v: BVec4) -> Self {
+        Self::new(v.x, v.y, v.z, v.w)
+    }
+}
+{% elif dim == 4 and not is_simd %}
+impl From<BVec4A> for BVec4 {
+    #[inline(always)]
+    fn from(v: BVec4A) -> Self {
+        let a = v.to_array();
+        Self::new(a[0], a[1], a[2], a[3])
+    }
+}
+{% endif %}

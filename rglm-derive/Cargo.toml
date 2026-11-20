@@ -1,0 +1,18 @@
+[package]
+name = "rglm-derive"
+description = "Procedural macros for Vulkan Std140, Std430, and Scalar buffer layouts in rglm"
+readme = "../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true

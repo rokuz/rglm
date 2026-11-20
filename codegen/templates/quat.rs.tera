@@ -1,0 +1,559 @@
+{% if is_f16 -%}
+use half::f16;
+{% endif -%}
+use crate::math::{{ math_mod }};
+{% if storage == "simd_f32x4" -%}
+use crate::simd::SimdF32x4;
+use core::ops::{Deref, DerefMut};
+{% elif storage == "simd_f64x2_pair" -%}
+use crate::simd::SimdF64x2;
+use core::ops::{Deref, DerefMut};
+{% endif -%}
+use crate::{ {{ mat3_t }}, {{ mat4_t }}, {{ vec3_t }}, {{ vec4_t }} };
+{% if self_t == "Quat" -%}
+use crate::{Mat3A, Vec3A};
+{% endif -%}
+use core::fmt;
+use core::ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign};
+
+{% if storage == "simd_f32x4" %}
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(transparent)]
+pub struct {{ self_t }}(pub(crate) SimdF32x4);
+{% elif storage == "simd_f64x2_pair" %}
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C, align(16))]
+pub struct {{ self_t }}(pub(crate) [SimdF64x2; 2]);
+{% else %}
+#[derive(Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C)]
+pub struct {{ self_t }} {
+    pub x: {{ scalar_t }},
+    pub y: {{ scalar_t }},
+    pub z: {{ scalar_t }},
+    pub w: {{ scalar_t }},
+}
+{% endif %}
+
+impl {{ self_t }} {
+    pub const ZERO: Self = Self::from_xyzw({{ zero_lit }}, {{ zero_lit }}, {{ zero_lit }}, {{ zero_lit }});
+    pub const IDENTITY: Self = Self::from_xyzw({{ zero_lit }}, {{ zero_lit }}, {{ zero_lit }}, {{ one_lit }});
+    pub const NAN: Self = Self::from_xyzw({{ scalar_t }}::NAN, {{ scalar_t }}::NAN, {{ scalar_t }}::NAN, {{ scalar_t }}::NAN);
+
+    #[inline(always)]
+    pub(crate) const fn from_xyzw(x: {{ scalar_t }}, y: {{ scalar_t }}, z: {{ scalar_t }}, w: {{ scalar_t }}) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(SimdF32x4::new(x, y, z, w))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([SimdF64x2::new(x, y), SimdF64x2::new(z, w)])
+        {% else -%}
+        Self { x, y, z, w }
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) const fn from_wxyz(w: {{ scalar_t }}, x: {{ scalar_t }}, y: {{ scalar_t }}, z: {{ scalar_t }}) -> Self {
+        Self::from_xyzw(x, y, z, w)
+    }
+
+    #[inline(always)]
+    pub(crate) const fn from_array(a: [{{ scalar_t }}; 4]) -> Self {
+        Self::from_xyzw(a[0], a[1], a[2], a[3])
+    }
+
+    #[inline(always)]
+    pub(crate) const fn to_array(self) -> [{{ scalar_t }}; 4] {
+        {% if storage == "simd_f32x4" -%}
+        self.0.to_array()
+        {% elif storage == "simd_f64x2_pair" -%}
+        let a0 = self.0[0].to_array();
+        let a1 = self.0[1].to_array();
+        [a0[0], a0[1], a1[0], a1[1]]
+        {% else -%}
+        [self.x, self.y, self.z, self.w]
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn dot(self, rhs: Self) -> {{ scalar_t }} {
+        {% if storage == "simd_f32x4" -%}
+        self.0.dot4(rhs.0)
+        {% elif storage == "simd_f64x2_pair" -%}
+        self.0[0].dot2(rhs.0[0]) + self.0[1].dot2(rhs.0[1])
+        {% else -%}
+        (self.x * rhs.x + self.z * rhs.z) + (self.y * rhs.y + self.w * rhs.w)
+        {% endif -%}
+    }
+
+    #[inline(always)]
+    pub(crate) fn length_squared(self) -> {{ scalar_t }} {
+        self.dot(self)
+    }
+
+    #[inline(always)]
+    pub(crate) fn length(self) -> {{ scalar_t }} {
+        {{ math_mod }}::sqrt(self.dot(self))
+    }
+
+    #[inline(always)]
+    pub(crate) fn normalize(self) -> Self {
+        let len_sq = self.dot(self);
+        rglm_debug_assert!(len_sq > {{ zero_lit }});
+        self * {{ math_mod }}::inversesqrt(len_sq)
+    }
+
+    #[inline(always)]
+    pub(crate) fn conjugate(self) -> Self {
+        Self::from_xyzw(-self.x, -self.y, -self.z, self.w)
+    }
+
+    #[inline(always)]
+    pub(crate) fn inverse(self) -> Self {
+        let len_sq = self.dot(self);
+        rglm_debug_assert!(len_sq > {{ zero_lit }});
+        self.conjugate() / len_sq
+    }
+
+    #[inline]
+    pub(crate) fn from_axis_angle(axis: {{ vec3_t }}, angle: {{ scalar_t }}) -> Self {
+        let half = angle * {{ half_lit }};
+        let (s, c) = {{ math_mod }}::sin_cos(half);
+        let v = axis * s;
+        Self::from_xyzw(v.x, v.y, v.z, c)
+    }
+
+    #[inline]
+    pub(crate) fn to_mat3(self) -> {{ mat3_t }} {
+        let x2 = self.x + self.x;
+        let y2 = self.y + self.y;
+        let z2 = self.z + self.z;
+        let xx = self.x * x2;
+        let xy = self.x * y2;
+        let xz = self.x * z2;
+        let yy = self.y * y2;
+        let yz = self.y * z2;
+        let zz = self.z * z2;
+        let wx = self.w * x2;
+        let wy = self.w * y2;
+        let wz = self.w * z2;
+        let one = {{ one_lit }};
+        {{ mat3_t }}::from_cols(
+            {{ vec3_t }}::new(one - (yy + zz), xy + wz, xz - wy),
+            {{ vec3_t }}::new(xy - wz, one - (xx + zz), yz + wx),
+            {{ vec3_t }}::new(xz + wy, yz - wx, one - (xx + yy)),
+        )
+    }
+
+    #[inline]
+    pub(crate) fn to_mat4(self) -> {{ mat4_t }} {
+        let m = self.to_mat3();
+        let zero = {{ zero_lit }};
+        let one = {{ one_lit }};
+        {{ mat4_t }}::from_cols(
+            {{ vec4_t }}::new(m.x_axis.x, m.x_axis.y, m.x_axis.z, zero),
+            {{ vec4_t }}::new(m.y_axis.x, m.y_axis.y, m.y_axis.z, zero),
+            {{ vec4_t }}::new(m.z_axis.x, m.z_axis.y, m.z_axis.z, zero),
+            {{ vec4_t }}::new(zero, zero, zero, one),
+        )
+    }
+
+    #[inline]
+    pub(crate) fn from_mat3(m: {{ mat3_t }}) -> Self {
+        let m00 = m.x_axis.x;
+        let m01 = m.x_axis.y;
+        let m02 = m.x_axis.z;
+        let m10 = m.y_axis.x;
+        let m11 = m.y_axis.y;
+        let m12 = m.y_axis.z;
+        let m20 = m.z_axis.x;
+        let m21 = m.z_axis.y;
+        let m22 = m.z_axis.z;
+
+        let four_x_sq_minus_1 = m00 - m11 - m22;
+        let four_y_sq_minus_1 = m11 - m00 - m22;
+        let four_z_sq_minus_1 = m22 - m00 - m11;
+        let four_w_sq_minus_1 = m00 + m11 + m22;
+
+        let mut biggest_idx = 0usize;
+        let mut four_biggest_sq_minus_1 = four_w_sq_minus_1;
+        if four_x_sq_minus_1 > four_biggest_sq_minus_1 {
+            four_biggest_sq_minus_1 = four_x_sq_minus_1;
+            biggest_idx = 1;
+        }
+        if four_y_sq_minus_1 > four_biggest_sq_minus_1 {
+            four_biggest_sq_minus_1 = four_y_sq_minus_1;
+            biggest_idx = 2;
+        }
+        if four_z_sq_minus_1 > four_biggest_sq_minus_1 {
+            four_biggest_sq_minus_1 = four_z_sq_minus_1;
+            biggest_idx = 3;
+        }
+
+        let biggest_val = {{ math_mod }}::sqrt(four_biggest_sq_minus_1 + {{ one_lit }}) * {{ half_lit }};
+        let mult = {{ quarter_lit }} / biggest_val;
+
+        match biggest_idx {
+            0 => Self::from_wxyz(
+                biggest_val,
+                (m12 - m21) * mult,
+                (m20 - m02) * mult,
+                (m01 - m10) * mult,
+            ),
+            1 => Self::from_wxyz(
+                (m12 - m21) * mult,
+                biggest_val,
+                (m01 + m10) * mult,
+                (m20 + m02) * mult,
+            ),
+            2 => Self::from_wxyz(
+                (m20 - m02) * mult,
+                (m01 + m10) * mult,
+                biggest_val,
+                (m12 + m21) * mult,
+            ),
+            _ => Self::from_wxyz(
+                (m01 - m10) * mult,
+                (m20 + m02) * mult,
+                (m12 + m21) * mult,
+                biggest_val,
+            ),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn slerp(self, mut z: Self, a: {{ scalar_t }}) -> Self {
+        let mut cos_theta = self.dot(z);
+        if cos_theta < {{ zero_lit }} {
+            z = -z;
+            cos_theta = -cos_theta;
+        }
+        if cos_theta > {{ slerp_threshold_lit }} {
+            return (self * ({{ one_lit }} - a) + z * a).normalize();
+        }
+        let angle = {{ math_mod }}::acos(cos_theta);
+        (self * {{ math_mod }}::sin(({{ one_lit }} - a) * angle) + z * {{ math_mod }}::sin(a * angle))
+            / {{ math_mod }}::sin(angle)
+    }
+}
+
+impl Default for {{ self_t }} {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+{% if storage != "fields" %}
+impl PartialEq for {{ self_t }} {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        {% if storage == "simd_f32x4" -%}
+        self.0.cmp_eq(other.0).all4()
+        {% else -%}
+        self.to_array() == other.to_array()
+        {% endif -%}
+    }
+}
+
+impl Deref for {{ self_t }} {
+    type Target = crate::deref::Vec4<{{ scalar_t }}>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} stores 4 contiguous {{ scalar_t }} components [x, y, z, w]"
+        )]
+        unsafe {
+            &*(core::ptr::from_ref(self).cast::<Self::Target>())
+        }
+    }
+}
+
+impl DerefMut for {{ self_t }} {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} stores 4 contiguous {{ scalar_t }} components [x, y, z, w]"
+        )]
+        unsafe {
+            &mut *(core::ptr::from_mut(self).cast::<Self::Target>())
+        }
+    }
+}
+{% endif %}
+
+impl fmt::Debug for {{ self_t }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let a = self.to_array();
+        f.debug_tuple(stringify!({{ self_t }}))
+            .field(&a[0])
+            .field(&a[1])
+            .field(&a[2])
+            .field(&a[3])
+            .finish()
+    }
+}
+
+impl fmt::Display for {{ self_t }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let a = self.to_array();
+        write!(f, "[{}, {}, {}, {}]", a[0], a[1], a[2], a[3])
+    }
+}
+
+impl AsRef<[{{ scalar_t }}; 4]> for {{ self_t }} {
+    #[inline(always)]
+    fn as_ref(&self) -> &[{{ scalar_t }}; 4] {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} stores 4 contiguous {{ scalar_t }} lanes"
+        )]
+        unsafe {
+            &*(core::ptr::from_ref(self).cast::<[{{ scalar_t }}; 4]>())
+        }
+    }
+}
+
+impl AsMut<[{{ scalar_t }}; 4]> for {{ self_t }} {
+    #[inline(always)]
+    fn as_mut(&mut self) -> &mut [{{ scalar_t }}; 4] {
+        #[expect(
+            unsafe_code,
+            reason = "{{ self_t }} stores 4 contiguous {{ scalar_t }} lanes"
+        )]
+        unsafe {
+            &mut *(core::ptr::from_mut(self).cast::<[{{ scalar_t }}; 4]>())
+        }
+    }
+}
+
+impl Index<usize> for {{ self_t }} {
+    type Output = {{ scalar_t }};
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.as_ref()[index]
+    }
+}
+
+impl IndexMut<usize> for {{ self_t }} {
+    #[inline(always)]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.as_mut()[index]
+    }
+}
+
+impl Add for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.add(rhs.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].add(rhs.0[0]), self.0[1].add(rhs.0[1])])
+        {% else -%}
+        Self::from_xyzw(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z, self.w + rhs.w)
+        {% endif -%}
+    }
+}
+
+impl AddAssign for {{ self_t }} {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.sub(rhs.0))
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].sub(rhs.0[0]), self.0[1].sub(rhs.0[1])])
+        {% else -%}
+        Self::from_xyzw(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z, self.w - rhs.w)
+        {% endif -%}
+    }
+}
+
+impl SubAssign for {{ self_t }} {
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl Neg for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn neg(self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.neg())
+        {% elif storage == "simd_f64x2_pair" -%}
+        Self([self.0[0].neg(), self.0[1].neg()])
+        {% else -%}
+        Self::from_xyzw(-self.x, -self.y, -self.z, -self.w)
+        {% endif -%}
+    }
+}
+
+impl Mul<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn mul(self, rhs: {{ scalar_t }}) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.mul(SimdF32x4::splat(rhs)))
+        {% elif storage == "simd_f64x2_pair" -%}
+        let s = SimdF64x2::splat(rhs);
+        Self([self.0[0].mul(s), self.0[1].mul(s)])
+        {% else -%}
+        Self::from_xyzw(self.x * rhs, self.y * rhs, self.z * rhs, self.w * rhs)
+        {% endif -%}
+    }
+}
+
+impl Mul<{{ self_t }}> for {{ scalar_t }} {
+    type Output = {{ self_t }};
+    #[inline(always)]
+    fn mul(self, rhs: {{ self_t }}) -> {{ self_t }} {
+        rhs * self
+    }
+}
+
+impl MulAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self * rhs;
+    }
+}
+
+impl Div<{{ scalar_t }}> for {{ self_t }} {
+    type Output = Self;
+    #[inline(always)]
+    fn div(self, rhs: {{ scalar_t }}) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.div(SimdF32x4::splat(rhs)))
+        {% elif storage == "simd_f64x2_pair" -%}
+        let s = SimdF64x2::splat(rhs);
+        Self([self.0[0].div(s), self.0[1].div(s)])
+        {% else -%}
+        Self::from_xyzw(self.x / rhs, self.y / rhs, self.z / rhs, self.w / rhs)
+        {% endif -%}
+    }
+}
+
+impl DivAssign<{{ scalar_t }}> for {{ self_t }} {
+    #[inline(always)]
+    fn div_assign(&mut self, rhs: {{ scalar_t }}) {
+        *self = *self / rhs;
+    }
+}
+
+impl Mul for {{ self_t }} {
+    type Output = Self;
+    #[inline]
+    fn mul(self, rhs: Self) -> Self {
+        {% if storage == "simd_f32x4" -%}
+        Self(self.0.quat_mul(rhs.0))
+        {% else -%}
+        let [lx, ly, lz, lw] = self.to_array();
+        let [rx, ry, rz, rw] = rhs.to_array();
+        Self::from_xyzw(
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw,
+            lw * rw - lx * rx - ly * ry - lz * rz,
+        )
+        {% endif -%}
+    }
+}
+
+impl MulAssign for {{ self_t }} {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
+impl Mul<{{ vec3_t }}> for {{ self_t }} {
+    type Output = {{ vec3_t }};
+    #[inline]
+    fn mul(self, rhs: {{ vec3_t }}) -> {{ vec3_t }} {
+        let [qx, qy, qz, qw] = self.to_array();
+        let qv = {{ vec3_t }}::new(qx, qy, qz);
+        let uv = qv.cross(rhs);
+        let uuv = qv.cross(uv);
+        rhs + ((uv * qw) + uuv) * {{ two_lit }}
+    }
+}
+
+impl Mul<{{ self_t }}> for {{ vec3_t }} {
+    type Output = {{ vec3_t }};
+    #[inline]
+    fn mul(self, rhs: {{ self_t }}) -> {{ vec3_t }} {
+        rhs.inverse() * self
+    }
+}
+
+{% if self_t == "Quat" %}
+impl Mul<Vec3A> for Quat {
+    type Output = Vec3A;
+    #[inline]
+    fn mul(self, rhs: Vec3A) -> Vec3A {
+        let w = self.0.swizzle::<3, 3, 3, 3>();
+        let two = SimdF32x4::splat(2.0);
+        let uv = self.0.cross3(rhs.0);
+        let uuv = self.0.cross3(uv);
+        Vec3A(uv.mul_add(w, uuv).mul_add(two, rhs.0))
+    }
+}
+
+impl Mul<Quat> for Vec3A {
+    type Output = Vec3A;
+    #[inline]
+    fn mul(self, rhs: Quat) -> Vec3A {
+        rhs.inverse() * self
+    }
+}
+
+impl Quat {
+    #[inline]
+    pub(crate) fn from_mat3a(m: Mat3A) -> Self {
+        Self::from_mat3(crate::Mat3::from_cols(
+            crate::Vec3::from(m.x_axis),
+            crate::Vec3::from(m.y_axis),
+            crate::Vec3::from(m.z_axis),
+        ))
+    }
+
+    #[inline]
+    pub(crate) fn to_mat3a(self) -> Mat3A {
+        let m = self.to_mat3();
+        Mat3A::from_cols(
+            Vec3A::from(m.x_axis),
+            Vec3A::from(m.y_axis),
+            Vec3A::from(m.z_axis),
+        )
+    }
+}
+{% endif %}
+
+impl From<[{{ scalar_t }}; 4]> for {{ self_t }} {
+    #[inline(always)]
+    fn from(a: [{{ scalar_t }}; 4]) -> Self {
+        Self::from_array(a)
+    }
+}
+
+impl From<{{ self_t }}> for [{{ scalar_t }}; 4] {
+    #[inline(always)]
+    fn from(q: {{ self_t }}) -> Self {
+        q.to_array()
+    }
+}

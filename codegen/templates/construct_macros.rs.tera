@@ -1,0 +1,26 @@
+{% for item in ctors -%}
+{% if item.cfg != "" -%}
+#[cfg(feature = "{{ item.cfg }}")]
+{% endif -%}
+/// Constructs `{{ item.out_t }}` from a scalar splat, tuple, array, or compatible vector/matrix.
+#[inline(always)]
+#[must_use]
+pub fn {{ item.name }}<A: crate::Construct<crate::{{ item.out_t }}>>(args: A) -> crate::{{ item.out_t }} {
+    args.construct()
+}
+
+{% if item.cfg != "" -%}
+#[cfg(feature = "{{ item.cfg }}")]
+{% endif -%}
+/// Variadic GLSL-style constructor forwarding 1-or-more arguments to [`{{ item.name }}`].
+#[macro_export]
+macro_rules! {{ item.name }} {
+    ($a:expr $(,)?) => {
+        $crate::{{ item.name }}($a)
+    };
+    ($a:expr, $($rest:expr),+ $(,)?) => {
+        $crate::{{ item.name }}(($a, $($rest),+))
+    };
+}
+
+{% endfor -%}

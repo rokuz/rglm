@@ -1,0 +1,56 @@
+[package]
+name = "rglm-fuzz"
+version = "0.1.0"
+publish = false
+edition = "2024"
+rust-version = "1.93"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[features]
+default = ["libfuzzer"]
+libfuzzer = ["dep:libfuzzer-sys"]
+
+[dependencies]
+arbitrary = { version = "1.4.2", features = ["derive"] }
+libfuzzer-sys = { version = "0.4", optional = true }
+rglm = { path = "../rglm", features = ["all-types", "bytemuck", "serde", "mint", "arbitrary", "derive"] }
+
+[[bin]]
+name = "builtins_no_panic"
+path = "fuzz_targets/builtins_no_panic.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mat_quat_algebra"
+path = "fuzz_targets/mat_quat_algebra.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "layout_roundtrip"
+path = "fuzz_targets/layout_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+todo = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"

@@ -1,0 +1,63 @@
+[package]
+name = "rglm"
+description = "SIMD-accelerated linear algebra library faithful to C++ GLM and Vulkan GLSL 460"
+readme = "../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[features]
+default = ["std", "all-types"]
+std = ["half?/std"]
+libm = ["dep:libm"]
+nostd-libm = ["dep:libm"]
+
+f16 = ["dep:half"]
+f64 = []
+i8 = []
+u8 = []
+i16 = []
+u16 = []
+i32 = []
+u32 = []
+i64 = []
+u64 = []
+
+float-types = ["f16", "f64"]
+integer-types = ["i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"]
+all-types = ["float-types", "integer-types"]
+
+debug-assert = []
+scalar-math = []
+core-simd = []
+
+bytemuck = ["dep:bytemuck", "half?/bytemuck"]
+serde = ["dep:serde_core", "half?/serde"]
+mint = ["dep:mint"]
+arbitrary = ["dep:arbitrary"]
+derive = ["dep:rglm-derive", "bytemuck"]
+
+[dependencies]
+arbitrary = { workspace = true, optional = true }
+bytemuck = { workspace = true, optional = true }
+half = { workspace = true, optional = true }
+libm = { workspace = true, optional = true }
+mint = { workspace = true, optional = true }
+rglm-derive = { workspace = true, optional = true }
+serde_core = { workspace = true, optional = true }
+
+[dev-dependencies]
+glam = { workspace = true }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "linalg"
+harness = false
+
+[lints]
+workspace = true

@@ -1,0 +1,230 @@
+use crate::BVec3;
+use crate::simd::SimdMask32x4;
+use core::fmt;
+use core::hash::{Hash, Hasher};
+use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Index, Not};
+
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "bytemuck", derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(transparent)]
+pub struct BVec3A(pub(crate) SimdMask32x4);
+
+impl BVec3A {
+    pub const FALSE: Self = Self::splat(false);
+    pub const TRUE: Self = Self::splat(true);
+
+    #[inline(always)]
+    pub(crate) const fn new(x: bool, y: bool, z: bool) -> Self {
+        Self(SimdMask32x4::new3(x, y, z))
+    }
+
+    #[inline(always)]
+    pub(crate) const fn splat(v: bool) -> Self {
+        Self::new(v, v, v)
+    }
+
+    #[inline(always)]
+    pub(crate) const fn from_array(a: [bool; 3]) -> Self {
+        Self::new(a[0], a[1], a[2])
+    }
+
+    #[inline(always)]
+    pub(crate) const fn to_array(self) -> [bool; 3] {
+        let a = self.0.to_bool_array();
+        [a[0], a[1], a[2]]
+    }
+
+    #[inline(always)]
+    pub(crate) fn bitmask(self) -> u32 {
+        self.0.bitmask3()
+    }
+
+    #[inline(always)]
+    pub(crate) fn any(self) -> bool {
+        self.0.any3()
+    }
+
+    #[inline(always)]
+    pub(crate) fn all(self) -> bool {
+        self.0.all3()
+    }
+
+    #[inline(always)]
+    pub(crate) const fn test(self, idx: usize) -> bool {
+        self.to_array()[idx]
+    }
+
+    #[inline(always)]
+    pub(crate) fn set(&mut self, idx: usize, val: bool) {
+        self.0.set(idx, val);
+    }
+}
+
+impl Default for BVec3A {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::FALSE
+    }
+}
+
+impl PartialEq for BVec3A {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.bitmask() == other.bitmask()
+    }
+}
+
+impl Eq for BVec3A {}
+
+impl Hash for BVec3A {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.to_array().hash(state);
+    }
+}
+
+impl fmt::Debug for BVec3A {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let a = self.to_array();
+        f.debug_tuple(stringify!(BVec3A))
+            .field(&a[0])
+            .field(&a[1])
+            .field(&a[2])
+            .finish()
+    }
+}
+
+impl fmt::Display for BVec3A {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let a = self.to_array();
+        write!(f, "[{}, {}, {}]", a[0], a[1], a[2])
+    }
+}
+
+impl Index<usize> for BVec3A {
+    type Output = bool;
+
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Self::Output {
+        static TRUE_VAL: bool = true;
+        static FALSE_VAL: bool = false;
+        if self.to_array()[index] {
+            &TRUE_VAL
+        } else {
+            &FALSE_VAL
+        }
+    }
+}
+
+impl BitAnd for BVec3A {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: Self) -> Self {
+        Self(self.0.bitand(rhs.0))
+    }
+}
+
+impl BitAnd<bool> for BVec3A {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: bool) -> Self {
+        self & Self::splat(rhs)
+    }
+}
+
+impl BitAndAssign for BVec3A {
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = *self & rhs;
+    }
+}
+
+impl BitOr for BVec3A {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0.bitor(rhs.0))
+    }
+}
+
+impl BitOr<bool> for BVec3A {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: bool) -> Self {
+        self | Self::splat(rhs)
+    }
+}
+
+impl BitOrAssign for BVec3A {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = *self | rhs;
+    }
+}
+
+impl BitXor for BVec3A {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: Self) -> Self {
+        Self(self.0.bitxor(rhs.0))
+    }
+}
+
+impl BitXor<bool> for BVec3A {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: bool) -> Self {
+        self ^ Self::splat(rhs)
+    }
+}
+
+impl BitXorAssign for BVec3A {
+    #[inline(always)]
+    fn bitxor_assign(&mut self, rhs: Self) {
+        *self = *self ^ rhs;
+    }
+}
+
+impl Not for BVec3A {
+    type Output = Self;
+    #[inline(always)]
+    fn not(self) -> Self {
+        Self(self.0.not3())
+    }
+}
+
+impl From<[bool; 3]> for BVec3A {
+    #[inline(always)]
+    fn from(a: [bool; 3]) -> Self {
+        Self::from_array(a)
+    }
+}
+
+impl From<BVec3A> for [bool; 3] {
+    #[inline(always)]
+    fn from(v: BVec3A) -> Self {
+        v.to_array()
+    }
+}
+
+impl From<(bool, bool, bool)> for BVec3A {
+    #[inline(always)]
+    fn from(t: (bool, bool, bool)) -> Self {
+        Self::new(t.0, t.1, t.2)
+    }
+}
+
+impl From<BVec3A> for (bool, bool, bool) {
+    #[inline(always)]
+    fn from(v: BVec3A) -> Self {
+        let a = v.to_array();
+        (a[0], a[1], a[2])
+    }
+}
+
+impl From<BVec3> for BVec3A {
+    #[inline(always)]
+    fn from(v: BVec3) -> Self {
+        Self::new(v.x, v.y, v.z)
+    }
+}

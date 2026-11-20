@@ -1,15 +1,18 @@
+.DS_Store
 .vscode
 .idea
 **/target
-#*.json
-*.swp
-**/*.rs.bk
-Cargo.lock
+**/Cargo.lock
+fuzz/corpus
+fuzz/artifacts
 Session.vim
 .cargo-ok
 cargo-timing*.html
-
-# Gungraun baselines are fetched from bitshifter/glam-bench-baselines at build time
-/benches/gungraun-baselines/
-# transient backup written by the ci bench command while it runs
-/Cargo.lock.bench-backup
+*.swp
+**/*.rs.bk
+*.local.md
+.agent*
+_agent*
+docs/PLAN.md
+PLAN.md
+*.plan.md
