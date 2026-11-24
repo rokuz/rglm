@@ -1,3 +1,5 @@
+mod package;
+
 use anyhow::{Context, bail};
 use serde::Deserialize;
 use std::fs;
@@ -948,9 +950,12 @@ fn main() -> anyhow::Result<()> {
         "fuzz" => {
             run_fuzz_smoke(&root, &args[1..])?;
         }
+        "package-crates" => {
+            package::package_crates(&root, &args[1..])?;
+        }
         other => {
             bail!(
-                "unknown xtask command `{other}` (expected `check`, `style`, `oracles`, `oracle-test`, `asm`, `bench`, or `fuzz`)"
+                "unknown xtask command `{other}` (expected `check`, `style`, `oracles`, `oracle-test`, `asm`, `bench`, `fuzz`, or `package-crates`)"
             );
         }
     }
