@@ -38,6 +38,8 @@ jobs:
         run: cargo doc --workspace --no-deps --all-features
       - name: Test no_std (libm)
         run: cargo test -p rglm --no-default-features --features libm,all-types,bytemuck,serde,mint,arbitrary,derive
+      - name: Test no_std (libm, minimal features)
+        run: cargo test -p rglm --no-default-features --features libm,all-types
       - name: Test scalar fallback
         run: cargo test -p rglm --features scalar-math,all-types,bytemuck,serde,mint,arbitrary,derive
       - name: Verify assembly zero-spill probes
