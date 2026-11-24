@@ -376,26 +376,14 @@ fn build_oracles(root: &Path) -> anyhow::Result<PathBuf> {
     };
 
     if !head_ok {
+        if glm_dir.exists() {
+            fs::remove_dir_all(&glm_dir)
+                .with_context(|| format!("failed to remove {}", glm_dir.display()))?;
+        }
         fs::create_dir_all(&glm_dir)
             .with_context(|| format!("failed to create {}", glm_dir.display()))?;
-        if !glm_dir.join(".git").exists() {
-            run_cmd(&glm_dir, "git", &["init"])?;
-        }
-        let has_origin = Command::new("git")
-            .current_dir(&glm_dir)
-            .args(["remote", "get-url", "origin"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if has_origin {
-            run_cmd(
-                &glm_dir,
-                "git",
-                &["remote", "set-url", "origin", &cfg.glm.repo],
-            )?;
-        } else {
-            run_cmd(&glm_dir, "git", &["remote", "add", "origin", &cfg.glm.repo])?;
-        }
+        run_cmd(&glm_dir, "git", &["init", "--quiet"])?;
+        run_cmd(&glm_dir, "git", &["remote", "add", "origin", &cfg.glm.repo])?;
         run_cmd(
             &glm_dir,
             "git",
@@ -424,6 +412,7 @@ fn build_oracles(root: &Path) -> anyhow::Result<PathBuf> {
             "-std=c++17",
             "-O2",
             "-fno-fast-math",
+            "-ffp-contract=off",
             "-I",
             glm_inc,
             cpp_src_str,
@@ -650,6 +639,7 @@ fn build_glm_bench_bins(root: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
             "-std=c++17",
             "-O3",
             "-fno-fast-math",
+            "-ffp-contract=off",
             "-I",
             glm_inc,
             cpp_src_str,
