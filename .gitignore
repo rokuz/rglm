@@ -3,6 +3,7 @@
 .idea
 **/target
 **/Cargo.lock
+!/Cargo.lock
 fuzz/corpus
 fuzz/artifacts
 Session.vim

@@ -2,11 +2,39 @@
 pub mod mask;
 
 use core::fmt;
-use core::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut, IndexMut};
 
 mod private {
     pub trait Sealed {}
 }
+
+trait SetLane<S> {
+    fn set_lane(&mut self, i: usize, v: S);
+}
+
+impl<S, T: IndexMut<usize, Output = S>> SetLane<S> for T {
+    #[inline(always)]
+    fn set_lane(&mut self, i: usize, v: S) {
+        self[i] = v;
+    }
+}
+
+macro_rules! impl_set_lane_via_array {
+    ($($t:ty),+) => {
+        $(
+            impl SetLane<bool> for $t {
+                #[inline(always)]
+                fn set_lane(&mut self, i: usize, v: bool) {
+                    let mut a = self.to_array();
+                    a[i] = v;
+                    *self = Self::from_array(a);
+                }
+            }
+        )+
+    };
+}
+
+impl_set_lane_via_array!(crate::BVec3A, crate::BVec4A);
 
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,9 +247,7 @@ macro_rules! impl_swizzle_family {
         {
             #[inline(always)]
             fn swz_write(&mut self, _: M1<X>, val: $s) {
-                let mut a = self.to_array();
-                a[X] = val;
-                *self = Self::from_array(a);
+                self.set_lane(X, val);
             }
         }
 
@@ -244,11 +270,9 @@ macro_rules! impl_swizzle_family {
         {
             #[inline(always)]
             fn swz_write(&mut self, _: M2<X, Y>, val: $v2) {
-                let mut a = self.to_array();
                 let s = val.to_array();
-                a[X] = s[0];
-                a[Y] = s[1];
-                *self = Self::from_array(a);
+                self.set_lane(X, s[0]);
+                self.set_lane(Y, s[1]);
             }
         }
 
@@ -271,12 +295,10 @@ macro_rules! impl_swizzle_family {
         {
             #[inline(always)]
             fn swz_write(&mut self, _: M3<X, Y, Z>, val: $v3) {
-                let mut a = self.to_array();
                 let s = val.to_array();
-                a[X] = s[0];
-                a[Y] = s[1];
-                a[Z] = s[2];
-                *self = Self::from_array(a);
+                self.set_lane(X, s[0]);
+                self.set_lane(Y, s[1]);
+                self.set_lane(Z, s[2]);
             }
         }
 
@@ -301,13 +323,11 @@ macro_rules! impl_swizzle_family {
         {
             #[inline(always)]
             fn swz_write(&mut self, _: M4<X, Y, Z, W>, val: $v4) {
-                let mut a = self.to_array();
                 let s = val.to_array();
-                a[X] = s[0];
-                a[Y] = s[1];
-                a[Z] = s[2];
-                a[W] = s[3];
-                *self = Self::from_array(a);
+                self.set_lane(X, s[0]);
+                self.set_lane(Y, s[1]);
+                self.set_lane(Z, s[2]);
+                self.set_lane(W, s[3]);
             }
         }
     };
