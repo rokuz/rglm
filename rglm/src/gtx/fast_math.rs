@@ -1,3 +1,4 @@
+use crate::math::f32_math;
 use crate::{Vec2, Vec3, Vec3A, Vec4};
 
 mod private {
@@ -37,7 +38,7 @@ fn scalar_fast_sin(x: f32) -> f32 {
     if !x.is_finite() {
         return f32::NAN;
     }
-    let k = (x * core::f32::consts::FRAC_1_PI).round();
+    let k = f32_math::round(x * core::f32::consts::FRAC_1_PI);
     let r = x - k * core::f32::consts::PI;
     let r2 = r * r;
     let p = r * (1.0 + r2 * (-0.166_666_67 + r2 * (0.008_333_334 - r2 * 0.000_198_412_7)));
@@ -61,7 +62,7 @@ fn scalar_fast_exp(x: f32) -> f32 {
         return f32::INFINITY;
     }
     let t = x * core::f32::consts::LOG2_E;
-    let fi = t.floor();
+    let fi = f32_math::floor(t);
     let f = t - fi;
     let p = 1.0 + f * (core::f32::consts::LN_2 + f * (0.240_226_5 + f * 0.055_504_11));
     let scale = f32::from_bits((((fi as i32) + 127) as u32) << 23);
